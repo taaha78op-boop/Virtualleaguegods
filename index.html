@@ -9,9 +9,10 @@
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: 'Vazirmatn', sans-serif;
-            background: linear-gradient(135deg, #0a0e27 0%, #1a1f3a 50%, #2a1f3a 100%);
+            background: #0f1420;
             color: #e0e0e0;
             min-height: 100vh;
+            overflow-x: hidden;
         }
         .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
         .login-screen { display: flex; justify-content: center; align-items: center; min-height: 100vh; }
@@ -23,9 +24,9 @@
             border: 2px solid rgba(30, 255, 0, 0.2);
             max-width: 500px;
             width: 100%;
-            animation: slideUp 0.8s ease-out;
+            animation: slideUp 0.3s ease-out;
         }
-        @keyframes slideUp { from { opacity: 0; transform: translateY(50px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes slideUp { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
         .login-title {
             font-family: 'Lalezar', cursive;
             font-size: 3.5em;
@@ -208,8 +209,9 @@
             border: 2px solid rgba(255, 50, 50, 0.4);
         }
         .data-table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-        .data-table th, .data-table td { padding: 15px; text-align: center; border-bottom: 1px solid rgba(255, 255, 255, 0.1); }
-        .data-table th { background: rgba(30, 255, 0, 0.1); color: #1eff00; font-weight: 600; }
+        .table-wrapper { overflow-x: auto; width: 100%; }
+        .data-table th, .data-table td { padding: 15px; text-align: center; border-bottom: 1px solid rgba(255, 255, 255, 0.1); white-space: nowrap; }
+        .data-table th { background: rgba(30, 255, 0, 0.1); color: #1eff00; font-weight: 600; position: sticky; top: 0; }
         .data-table tr:hover { background: rgba(255, 255, 255, 0.05); }
         .player-card {
             background: rgba(255, 255, 255, 0.05);
@@ -2600,23 +2602,25 @@
                     groupsHtml += `
                         <div class="card" style="margin-bottom: 20px;">
                             <h3 style="color:#1eff00; margin-bottom:15px;">${groupName}</h3>
-                            <table class="data-table">
-                                <thead><tr><th>رتبه</th><th>تیم</th><th>بازی</th><th>برد</th><th>مساوی</th><th>باخت</th><th>گل زده</th><th>گل خورده</th><th>تفاضل</th><th>امتیاز</th></tr></thead>
-                                <tbody>${groupTeams.map((t, i) => `
-                                    <tr>
-                                        <td>${i + 1}</td>
-                                        <td style="text-align:right;font-weight:600;">${t.name}</td>
-                                        <td>${t.w + t.d + t.l}</td>
-                                        <td>${t.w}</td>
-                                        <td>${t.d}</td>
-                                        <td>${t.l}</td>
-                                        <td>${t.gf}</td>
-                                        <td>${t.ga}</td>
-                                        <td style="color:${t.gf - t.ga > 0 ? '#1eff00' : t.gf - t.ga < 0 ? '#ff5050' : '#fff'}">${t.gf - t.ga > 0 ? '+' : ''}${t.gf - t.ga}</td>
-                                        <td style="font-weight:700;color:#1eff00;">${t.p}</td>
-                                    </tr>
-                                `).join('')}</tbody>
-                            </table>
+                            <div class="table-wrapper">
+                                <table class="data-table">
+                                    <thead><tr><th>رتبه</th><th>تیم</th><th>بازی</th><th>برد</th><th>مساوی</th><th>باخت</th><th>گل زده</th><th>گل خورده</th><th>تفاضل</th><th>امتیاز</th></tr></thead>
+                                    <tbody>${groupTeams.map((t, i) => `
+                                        <tr>
+                                            <td>${i + 1}</td>
+                                            <td style="text-align:right;font-weight:600;">${t.name}</td>
+                                            <td>${t.w + t.d + t.l}</td>
+                                            <td>${t.w}</td>
+                                            <td>${t.d}</td>
+                                            <td>${t.l}</td>
+                                            <td>${t.gf}</td>
+                                            <td>${t.ga}</td>
+                                            <td style="color:${t.gf - t.ga > 0 ? '#1eff00' : t.gf - t.ga < 0 ? '#ff5050' : '#fff'}">${t.gf - t.ga > 0 ? '+' : ''}${t.gf - t.ga}</td>
+                                            <td style="font-weight:700;color:#1eff00;">${t.p}</td>
+                                        </tr>
+                                    `).join('')}</tbody>
+                                </table>
+                            </div>
                         </div>
                     `;
                 });
@@ -2641,12 +2645,13 @@
                     <div class="card">
                         <h2 class="card-title">جدول رده‌بندی</h2>
                         ${sorted.length === 0 ? '<p style="color:#b0b0b0;">تیمی وجود ندارد</p>' : `
-                            <table class="data-table">
-                                <thead><tr><th>رتبه</th><th>تیم</th><th>بازی</th><th>برد</th><th>مساوی</th><th>باخت</th><th>گل زده</th><th>گل خورده</th><th>تفاضل</th><th>امتیاز</th></tr></thead>
-                                <tbody>${sorted.map((t, i) => `
-                                    <tr>
-                                        <td>${i + 1}</td>
-                                        <td style="text-align:right;font-weight:600;">${t.name}</td>
+                            <div class="table-wrapper">
+                                <table class="data-table">
+                                    <thead><tr><th>رتبه</th><th>تیم</th><th>بازی</th><th>برد</th><th>مساوی</th><th>باخت</th><th>گل زده</th><th>گل خورده</th><th>تفاضل</th><th>امتیاز</th></tr></thead>
+                                    <tbody>${sorted.map((t, i) => `
+                                        <tr>
+                                            <td>${i + 1}</td>
+                                            <td style="text-align:right;font-weight:600;">${t.name}</td>
                                         <td>${t.w + t.d + t.l}</td>
                                         <td>${t.w}</td>
                                         <td>${t.d}</td>
@@ -2658,6 +2663,7 @@
                                     </tr>
                                 `).join('')}</tbody>
                             </table>
+                            </div>
                         `}
                     </div>
                 `;
@@ -2665,9 +2671,34 @@
         }
 
         function renderMatchesView(c) {
+            // محاسبه بازی‌های هفته
+            const currentWeek = Math.floor(app.matches.length / (app.teams.length / 2)) + 1;
+            const weekMatches = app.matches.filter((m, idx) => {
+                const matchWeek = Math.floor(idx / (app.teams.length / 2)) + 1;
+                return matchWeek === currentWeek;
+            });
+            
             c.innerHTML = `
                 <div class="card">
                     <h2 class="card-title">مسابقات</h2>
+                    
+                    ${weekMatches.length > 0 ? `
+                        <div style="margin-bottom: 30px;">
+                            <h3 style="color:#1eff00; margin-bottom:15px;">🏆 بازی‌های هفته ${currentWeek}</h3>
+                            ${weekMatches.map(m => `
+                                <div class="match-card">
+                                    <div class="match-teams">
+                                        <span class="team-name">${m.home}</span>
+                                        <span class="match-score">${m.homeScore} - ${m.awayScore}</span>
+                                        <span class="team-name">${m.away}</span>
+                                    </div>
+                                    ${m.scorers ? `<div style="color:#b0b0b0;margin-top:10px;">گلزنان: ${m.scorers}</div>` : ''}
+                                </div>
+                            `).join('')}
+                        </div>
+                    ` : ''}
+                    
+                    <h3 style="color:#fff; margin-bottom:15px;">تمام مسابقات</h3>
                     ${app.matches.length === 0 ? '<p style="color:#b0b0b0;">مسابقه‌ای وجود ندارد</p>' : app.matches.map(m => `
                         <div class="match-card">
                             <div class="match-teams">
@@ -3119,17 +3150,43 @@
                 { pos: 'FW', x: 35, y: 20 },
                 { pos: 'FW', x: 65, y: 20 }
             ],
-            '4-2-3-1': [
+            '5-4-1': [
+                { pos: 'GK', x: 50, y: 95 },
+                { pos: 'DF', x: 15, y: 75 },
+                { pos: 'DF', x: 32, y: 75 },
+                { pos: 'DF', x: 50, y: 75 },
+                { pos: 'DF', x: 68, y: 75 },
+                { pos: 'DF', x: 85, y: 75 },
+                { pos: 'MF', x: 25, y: 45 },
+                { pos: 'MF', x: 42, y: 50 },
+                { pos: 'MF', x: 58, y: 50 },
+                { pos: 'MF', x: 75, y: 45 },
+                { pos: 'FW', x: 50, y: 20 }
+            ],
+            '3-4-3': [
+                { pos: 'GK', x: 50, y: 95 },
+                { pos: 'DF', x: 30, y: 75 },
+                { pos: 'DF', x: 50, y: 75 },
+                { pos: 'DF', x: 70, y: 75 },
+                { pos: 'MF', x: 25, y: 50 },
+                { pos: 'MF', x: 45, y: 50 },
+                { pos: 'MF', x: 55, y: 50 },
+                { pos: 'MF', x: 75, y: 50 },
+                { pos: 'FW', x: 20, y: 20 },
+                { pos: 'FW', x: 50, y: 15 },
+                { pos: 'FW', x: 80, y: 20 }
+            ],
+            '4-5-1': [
                 { pos: 'GK', x: 50, y: 95 },
                 { pos: 'DF', x: 20, y: 75 },
                 { pos: 'DF', x: 40, y: 75 },
                 { pos: 'DF', x: 60, y: 75 },
                 { pos: 'DF', x: 80, y: 75 },
-                { pos: 'MF', x: 35, y: 60 },
-                { pos: 'MF', x: 65, y: 60 },
-                { pos: 'MF', x: 25, y: 40 },
-                { pos: 'MF', x: 50, y: 40 },
-                { pos: 'MF', x: 75, y: 40 },
+                { pos: 'MF', x: 15, y: 45 },
+                { pos: 'MF', x: 35, y: 50 },
+                { pos: 'MF', x: 50, y: 48 },
+                { pos: 'MF', x: 65, y: 50 },
+                { pos: 'MF', x: 85, y: 45 },
                 { pos: 'FW', x: 50, y: 20 }
             ]
         };
@@ -3230,6 +3287,7 @@
             currentLineup = {};
             renderLineupEditor(document.getElementById('content'));
         }
+        window.changeFormation = changeFormation;
 
         function openPlayerSelector(slotIdx, position) {
             selectedSlot = slotIdx;
@@ -3254,6 +3312,7 @@
             
             modal.classList.add('show');
         }
+        window.openPlayerSelector = openPlayerSelector;
 
         function selectPlayer(playerId) {
             if (selectedSlot !== null) {
@@ -3269,11 +3328,13 @@
                 renderLineupEditor(document.getElementById('content'));
             }
         }
+        window.selectPlayer = selectPlayer;
 
         function closeModal() {
             document.getElementById('playerModal').classList.remove('show');
             selectedSlot = null;
         }
+        window.closeModal = closeModal;
 
         function saveLineup() {
             app.lineups[app.team] = {
@@ -3290,6 +3351,7 @@
             saveData();
             alert('✅ ترکیب با موفقیت ذخیره شد!');
         }
+        window.saveLineup = saveLineup;
 
         function clearLineup() {
             if (!confirm('آیا از پاک کردن تمام ترکیب مطمئن هستید؟')) return;
@@ -3297,6 +3359,7 @@
             currentLineup = {};
             renderLineupEditor(document.getElementById('content'));
         }
+        window.clearLineup = clearLineup;
 
         function autoFillLineup() {
             const teamPlayers = app.players.filter(p => p.team === app.team);
@@ -3319,6 +3382,7 @@
             renderLineupEditor(document.getElementById('content'));
             alert('ترکیب به صورت خودکار پر شد!');
         }
+        window.autoFillLineup = autoFillLineup;
     </script>
 </body>
 </html>
