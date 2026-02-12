@@ -798,11 +798,13 @@
             applyStoredSettings();
             // طبق درخواست: هر بار که کسی وارد سایت می‌شود بخش ورود باز شود
             app.user = null;
+            app.role = 'admin'; // تنظیم پیش‌فرض برای نمایش صفحه ورود
             renderApp();
         }).catch(() => {
             // حتی اگر خطا بود، صفحه باز شود
             applyStoredSettings();
             app.user = null;
+            app.role = 'admin'; // تنظیم پیش‌فرض برای نمایش صفحه ورود
             renderApp();
         });
 
