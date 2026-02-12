@@ -1282,6 +1282,25 @@
                     </div>
                     <button class="btn" onclick="addPlayer()">افزودن بازیکن</button>
                 </div>
+
+                <div class="card">
+                    <h2 class="card-title">افزودن چند بازیکن یکجا</h2>
+                    <p style="color: #b0b0b0; margin-bottom: 15px;">فرمت: نام،اورال،پست (هر بازیکن در یک خط)</p>
+                    <p style="color: #888; margin-bottom: 20px; font-size: 0.9em;">مثال:<br>محمد رضایی،85،GK<br>علی احمدی،78،MF<br>حسین کریمی،82،DF</p>
+                    <div class="form-group">
+                        <label>تیم</label>
+                        <select id="multiPlayerTeam">
+                            ${allTeamsForPlayer.map(t => `<option>${t.name}</option>`).join('')}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>لیست بازیکنان</label>
+                        <textarea id="multiPlayerList" rows="8" placeholder="نام،اورال،پست
+نام،اورال،پست
+..."></textarea>
+                    </div>
+                    <button class="btn" onclick="addMultiplePlayers()">افزودن همه بازیکنان</button>
+                </div>
                 
                 <div class="card">
                     <h2 class="card-title">بازیکنان موجود</h2>
@@ -1355,6 +1374,77 @@
             app.players.push({ id: Date.now(), name, team, position, overall });
             saveData();
             showTab('players');
+        }
+
+        function addMultiplePlayers() {
+            const team = document.getElementById('multiPlayerTeam').value;
+            const list = document.getElementById('multiPlayerList').value.trim();
+            
+            if (!team) {
+                alert('لطفا تیم را انتخاب کنید');
+                return;
+            }
+            
+            if (!list) {
+                alert('لطفا لیست بازیکنان را وارد کنید');
+                return;
+            }
+            
+            const lines = list.split('\n').filter(line => line.trim());
+            let successCount = 0;
+            let errorLines = [];
+            
+            lines.forEach((line, index) => {
+                const parts = line.split('،').map(p => p.trim());
+                
+                if (parts.length !== 3) {
+                    errorLines.push(`خط ${index + 1}: فرمت نادرست - باید سه بخش باشد (نام،اورال،پست)`);
+                    return;
+                }
+                
+                const [name, overallStr, position] = parts;
+                const overall = parseInt(overallStr);
+                
+                if (!name) {
+                    errorLines.push(`خط ${index + 1}: نام بازیکن خالی است`);
+                    return;
+                }
+                
+                if (isNaN(overall) || overall < 1 || overall > 99) {
+                    errorLines.push(`خط ${index + 1}: اورال باید عدد بین 1 تا 99 باشد`);
+                    return;
+                }
+                
+                const validPositions = ['GK', 'DF', 'MF', 'FW'];
+                if (!validPositions.includes(position)) {
+                    errorLines.push(`خط ${index + 1}: پست باید یکی از GK، DF، MF، FW باشد`);
+                    return;
+                }
+                
+                app.players.push({
+                    id: Date.now() + index,
+                    name,
+                    team,
+                    position,
+                    overall
+                });
+                
+                successCount++;
+            });
+            
+            if (successCount > 0) {
+                saveData();
+            }
+            
+            if (errorLines.length > 0) {
+                alert(`${successCount} بازیکن با موفقیت اضافه شد.\n\nخطاها:\n${errorLines.join('\n')}`);
+            } else {
+                alert(`✅ ${successCount} بازیکن با موفقیت اضافه شد`);
+            }
+            
+            if (successCount > 0) {
+                showTab('players');
+            }
         }
 
         function editPlayer(id) {
