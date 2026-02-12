@@ -861,7 +861,7 @@
                 container.innerHTML = `
                     <div class="input-group">
                         <label>انتخاب تیم</label>
-                        <div id="teamsList" style="display:flex; flex-direction:column; gap:10px;">
+                        <div id="teamsList" style="display:flex; flex-direction:column; gap:10px; max-height:300px; overflow-y:auto; padding-left:4px;">
                             ${teams.length === 0 ? '<p style="color:#b0b0b0; text-align:center;">هیچ تیمی ثبت نشده است</p>' : 
                                 teams.map(teamKey => {
                                     const team = app.userTeams[teamKey];
