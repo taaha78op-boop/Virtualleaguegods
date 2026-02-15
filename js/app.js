@@ -1,1 +1,2825 @@
+const app = {
+            user: null,
+            role: null,
+            team: null,
+            teams: [],
+            players: [],
+            matches: [],
+            budgets: [],
+            transfers: [],
+            news: [],
+            bets: [],
+            notifications: [],
+            userTeams: {},
+            pendingPlayers: [],
+            pendingTransfers: [],
+            lineups: {},
+            schedule: [],
+            leagueType: 'league',
+            settings: {
+                buttonColor: '#1eff00',
+                buttonSecondColor: '#00ff88',
+                buttonPositions: {},
+                bgImage: '',
+                bgColor1: '#0a0e27',
+                bgColor2: '#2a1f3a',
+                logoImage: '',
+                leagueName: 'لیگ فوتبال'
+            }
+        };
 
+        // Storage Configuration - یکی از دو روش زیر را انتخاب کنید
+        const STORAGE_TYPE ='jsonbin'
+        
+        // GitHub Gist Configuration (اختیاری)
+        const GIST_ID = '';
+        const GITHUB_TOKEN = '';
+        
+        // JSONBin Configuration (ساده‌تر - پیشنهادی)
+        const JSONBIN_ID = '698da9c5d0ea881f40b4930a';
+        const JSONBIN_KEY = '$2a$10$mFtitb.iHP4TG9XMcEMVcOleX1B/lik6tUr7oM7QU6S9xDHlrHJ7i';
+        
+        // تابع کمکی برای fetch با timeout
+        function fetchWithTimeout(url, options = {}, timeoutMs = 5000) {
+            return new Promise((resolve, reject) => {
+                const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+                const timer = setTimeout(() => {
+                    if (controller) controller.abort();
+                    reject(new Error('timeout'));
+                }, timeoutMs);
+                const fetchOptions = controller ? { ...options, signal: controller.signal } : options;
+                fetch(url, fetchOptions)
+                    .then(res => { clearTimeout(timer); resolve(res); })
+                    .catch(err => { clearTimeout(timer); reject(err); });
+            });
+        }
+
+        async function loadData() {
+            let dataLoaded = false;
+            
+            // ابتدا سعی می‌کنیم از سرور بخوانیم (اولویت با سرور)
+            try {
+                if (STORAGE_TYPE === 'github' && typeof GIST_ID !== 'undefined' && GIST_ID && GIST_ID !== 'YOUR_GIST_ID_HERE') {
+                    const response = await fetchWithTimeout(`https://api.github.com/gists/${GIST_ID}`, {}, 10000);
+                    if (response.ok) {
+                        const gist = await response.json();
+                        const content = gist.files['data.json'].content;
+                        const data = JSON.parse(content);
+                        Object.assign(app, data);
+                        localStorage.setItem('footballLeagueData', JSON.stringify(app));
+                        dataLoaded = true;
+                        console.log('✓ داده‌ها از GitHub بارگذاری شد');
+                    }
+                } else if (STORAGE_TYPE === 'jsonbin' && JSONBIN_ID && JSONBIN_ID !== 'YOUR_JSONBIN_ID_HERE') {
+                    const response = await fetchWithTimeout(`https://api.jsonbin.io/v3/b/${JSONBIN_ID}/latest`, {
+                        headers: { 'X-Master-Key': JSONBIN_KEY }
+                    }, 10000);
+                    if (response.ok) {
+                        const result = await response.json();
+                        Object.assign(app, result.record);
+                        localStorage.setItem('footballLeagueData', JSON.stringify(app));
+                        dataLoaded = true;
+                        console.log('✓ داده‌ها از JSONBin بارگذاری شد');
+                    }
+                }
+            } catch (error) {
+                console.warn('بارگذاری از سرور ممکن نشد، سعی می‌کنیم از localStorage بخوانیم:', error.message);
+            }
+
+            // اگر از سرور نتوانستیم بخوانیم، از localStorage می‌خوانیم
+            if (!dataLoaded) {
+                try {
+                    const saved = localStorage.getItem('footballLeagueData');
+                    if (saved) {
+                        const data = JSON.parse(saved);
+                        Object.assign(app, data);
+                        console.log('✓ داده‌ها از localStorage بارگذاری شد');
+                    }
+                } catch (e) {
+                    console.error('خطا در خواندن localStorage:', e);
+                }
+            }
+        }
+
+        
+        // ----- شروع توابع مدیریت گروهی (اضافه‌شده طبق درخواست) -----
+        function shuffleArray(arr) {
+            for (let i = arr.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [arr[i], arr[j]] = [arr[j], arr[i]];
+            }
+        }
+
+        function runGroupDraw() {
+            const leagueTeams = app.teams.filter(t => t.name !== 'آزاد و جهانی').map(t => t.name);
+            const groupsCount = parseInt(document.getElementById('groupsCount').value) || 1;
+            if (groupsCount < 1) { alert('تعداد گروه‌ها باید حداقل 1 باشد'); return; }
+            // Shuffle teams and distribute into groups
+            const teams = [...leagueTeams];
+            shuffleArray(teams);
+            const groups = {};
+
+            for (let i = 0; i < groupsCount; i++) groups['گروه ' + (i+1)] = [];
+
+            let idx = 0;
+            while (teams.length) {
+                const g = 'گروه ' + ((idx % groupsCount) + 1);
+                groups[g].push(teams.shift());
+                idx++;
+            }
+
+            app.groups = groups;
+            saveData();
+            // display groups
+            const groupsArea = document.getElementById('groupsArea');
+            groupsArea.innerHTML = Object.keys(groups).map(g => `<div style="margin-bottom:10px;"><strong>${g}:</strong> ${groups[g].join('، ')}</div>`).join('');
+            alert('✅ قرعه‌کشی گروهی انجام شد');
+        }
+
+        function advanceFromGroups() {
+            const advancePerGroup = parseInt(document.getElementById('advancePerGroup').value) || 2;
+            if (!app.groups) { alert('ابتدا قرعه‌کشی گروهی را انجام دهید'); return; }
+            // For each group pick top N by current points (app.teams), fallback to goal diff then random
+            const advancers = [];
+            Object.keys(app.groups).forEach(g => {
+                const teams = app.groups[g];
+                const sorted = teams.map(name => {
+                    const t = app.teams.find(x => x.name === name) || { name, p:0, gf:0, ga:0 };
+                    return { name: t.name, p: t.p || 0, gd: (t.gf||0) - (t.ga||0) };
+                }).sort((a,b) => b.p - a.p || b.gd - a.gd);
+                // if tie and not enough distinct, fill with random selection among tied teams
+                const selected = sorted.slice(0, advancePerGroup).map(s => s.name);
+                advancers.push(...selected);
+            });
+            app.groupAdvancers = advancers;
+            saveData();
+            alert('✅ تیم‌های صعودکننده ثبت شدند:\n' + advancers.join('، '));
+        }
+        // ----- پایان توابع مدیریت گروهی -----
+
+    async function saveData() {
+            // ذخیره در localStorage
+            try {
+                localStorage.setItem('footballLeagueData', JSON.stringify(app));
+                console.log('✓ داده‌ها در localStorage ذخیره شد');
+            } catch(e) {
+                console.error('خطا در ذخیره localStorage:', e);
+                alert('⚠️ خطا در ذخیره محلی داده‌ها');
+            }
+            
+            // ذخیره در سرور (در صورت امکان)
+            let serverSaved = false;
+            try {
+                if (STORAGE_TYPE === 'github' && GIST_ID && GIST_ID !== 'YOUR_GIST_ID_HERE' && GITHUB_TOKEN && GITHUB_TOKEN !== 'YOUR_GITHUB_TOKEN_HERE') {
+                    const response = await fetchWithTimeout(`https://api.github.com/gists/${GIST_ID}`, {
+                        method: 'PATCH',
+                        headers: {
+                            'Authorization': `token ${GITHUB_TOKEN}`,
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            files: {
+                                'data.json': {
+                                    content: JSON.stringify(app, null, 2)
+                                }
+                            }
+                        })
+                    }, 10000);
+                    if (response.ok) {
+                        serverSaved = true;
+                        console.log('✓ داده‌ها در GitHub ذخیره شد');
+                    }
+                } else if (STORAGE_TYPE === 'jsonbin' && JSONBIN_ID && JSONBIN_ID !== 'YOUR_JSONBIN_ID_HERE' && JSONBIN_KEY && JSONBIN_KEY !== 'YOUR_JSONBIN_KEY_HERE') {
+                    const response = await fetchWithTimeout(`https://api.jsonbin.io/v3/b/${JSONBIN_ID}`, {
+                        method: 'PUT',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-Master-Key': JSONBIN_KEY
+                        },
+                        body: JSON.stringify(app)
+                    }, 10000);
+                    if (response.ok) {
+                        serverSaved = true;
+                        console.log('✓ داده‌ها در JSONBin ذخیره شد');
+                    }
+                }
+            } catch (error) {
+                console.warn('ذخیره در سرور ممکن نشد - فقط در localStorage ذخیره شد:', error.message);
+            }
+            
+            return serverSaved;
+        }
+
+        loadData().then(() => {
+            // تیم آزاد و جهانی را بساز اگر وجود ندارد
+            if (!app.teams.find(t => t.name === 'آزاد و جهانی')) {
+                // فقط در userTeams ثبت کن نه teams (جدول)
+                if (!app.userTeams['آزاد و جهانی']) {
+                    app.userTeams['آزاد و جهانی'] = { name: 'آزاد و جهانی', username: 'free', password: 'free123', isFreeTeam: true };
+                    app.budgets.push({ team: 'آزاد و جهانی', budget: 999999999 });
+                    saveData();
+                }
+            }
+            applyStoredSettings();
+            // طبق درخواست: هر بار که کسی وارد سایت می‌شود بخش ورود باز شود
+            app.user = null;
+            app.role = 'admin'; // تنظیم پیش‌فرض برای نمایش صفحه ورود
+            renderApp();
+        }).catch(() => {
+            // حتی اگر خطا بود، صفحه باز شود
+            applyStoredSettings();
+            app.user = null;
+            app.role = 'admin'; // تنظیم پیش‌فرض برای نمایش صفحه ورود
+            renderApp();
+        });
+
+        function applyStoredSettings() {
+            if (app.settings.bgImage) {
+                document.body.style.backgroundImage = `url('${app.settings.bgImage}')`;
+                document.body.style.backgroundSize = 'cover';
+                document.body.style.backgroundAttachment = 'fixed';
+                document.body.style.backgroundPosition = 'center';
+            } else if (app.settings.bgColor1 && app.settings.bgColor2) {
+                document.body.style.background = `linear-gradient(135deg, ${app.settings.bgColor1} 0%, ${app.settings.bgColor2} 100%)`;
+            }
+        }
+
+        function renderApp() {
+            const root = document.getElementById('app');
+            
+            if (!app.user) {
+                renderLogin(root);
+            } else if (app.role === 'admin') {
+                renderAdmin(root);
+            } else if (app.role === 'team') {
+                renderTeam(root);
+            } else {
+                renderViewer(root);
+            }
+        }
+
+        function renderLogin(root) {
+            const logoHtml = app.settings.logoImage ? 
+                `<img src="${app.settings.logoImage}" style="width:100px;height:100px;object-fit:contain;margin:0 auto 15px;display:block;border-radius:50%;" alt="لوگو">` : 
+                `<div style="font-size:4em;text-align:center;margin-bottom:10px;">⚽</div>`;
+            root.innerHTML = `
+                <div class="login-screen">
+                    <div class="login-card">
+                        ${logoHtml}
+                        <h1 class="login-title">${app.settings.leagueName || 'لیگ فوتبال'}</h1>
+                        <p class="login-subtitle">مدیریت حرفه‌ای لیگ فوتبال</p>
+                        
+                        <div class="role-selector">
+                            <div class="role-btn ${app.role === 'admin' ? 'active' : ''}" onclick="selectRole('admin', event)">مدیر</div>
+                            <div class="role-btn ${app.role === 'team' ? 'active' : ''}" onclick="selectRole('team', event)">تیم</div>
+                            <div class="role-btn ${app.role === 'viewer' ? 'active' : ''}" onclick="selectRole('viewer', event)">روح</div>
+                        </div>
+                        
+                        <div id="loginFields"></div>
+                        
+                        <button class="login-btn" type="button" onclick="login()">ورود</button>
+                    </div>
+                </div>
+            `;
+            
+            updateLoginFields();
+        }
+
+        function selectRole(role, e) {
+            app.role = role;
+            const evt = e || window.event;
+            document.querySelectorAll('.role-btn').forEach(btn => btn.classList.remove('active'));
+            if (evt && evt.target) {
+                evt.target.classList.add('active');
+            }
+            updateLoginFields();
+        }
+
+        function updateLoginFields() {
+            const container = document.getElementById('loginFields');
+            if (!container) return;
+            
+            if (app.role === 'viewer') {
+                container.innerHTML = `
+                    <p style="text-align: center; color: #1eff00; margin: 20px 0;">
+                        ورود مستقیم به حالت تماشاگر
+                    </p>
+                `;
+            } else if (app.role === 'team') {
+                // تیم آزاد و جهانی در لیست ورود تیم‌ها نشان داده نمی‌شه
+                const teams = Object.keys(app.userTeams).filter(k => !app.userTeams[k].isFreeTeam);
+                container.innerHTML = `
+                    <div class="input-group">
+                        <label>انتخاب تیم</label>
+                        <div id="teamsList" style="display:flex; flex-direction:column; gap:10px; max-height:300px; overflow-y:auto; padding-left:4px;">
+                            ${teams.length === 0 ? '<p style="color:#b0b0b0; text-align:center;">هیچ تیمی ثبت نشده است</p>' : 
+                                teams.map(teamKey => {
+                                    const team = app.userTeams[teamKey];
+                                    return `
+                                        <button type="button" class="team-select-btn" data-team="${team.name}" onclick="selectTeam('${team.name}')">
+                                            ${team.name}
+                                        </button>
+                                    `;
+                                }).join('')
+                            }
+                        </div>
+                    </div>
+                    <div class="input-group">
+                        <label>رمز عبور</label>
+                        <input type="password" id="password" placeholder="رمز عبور خود را وارد کنید">
+                    </div>
+                `;
+            } else {
+                container.innerHTML = `
+                    <div class="input-group">
+                        <label>نام کاربری</label>
+                        <input type="text" id="username" placeholder="نام کاربری خود را وارد کنید">
+                    </div>
+                    <div class="input-group">
+                        <label>رمز عبور</label>
+                        <input type="password" id="password" placeholder="رمز عبور خود را وارد کنید">
+                    </div>
+                `;
+            }
+        }
+
+        function selectTeam(teamName) {
+            document.querySelectorAll('.team-select-btn').forEach(btn => {
+                btn.classList.remove('selected');
+            });
+            event.target.classList.add('selected');
+            app.selectedTeam = teamName;
+        }
+
+        function login() {
+            if (app.role === 'viewer') {
+                app.user = 'viewer';
+                app.team = null;
+                renderApp();
+                return;
+            }
+
+            const password = document.getElementById('password').value.trim();
+            
+            if (!password) {
+                alert('لطفا رمز عبور را وارد کنید');
+                return;
+            }
+            
+            if (app.role === 'admin') {
+                const username = document.getElementById('username').value.trim();
+                if (!username) {
+                    alert('لطفا نام کاربری را وارد کنید');
+                    return;
+                }
+                if (username === 'admin' && password === 'admin123') {
+                    app.user = username;
+                    renderApp();
+                } else {
+                    alert('نام کاربری یا رمز عبور اشتباه است');
+                }
+            } else if (app.role === 'team') {
+                if (!app.selectedTeam) {
+                    alert('لطفا یک تیم را انتخاب کنید');
+                    return;
+                }
+                
+                const teamKey = Object.keys(app.userTeams).find(t => app.userTeams[t].name === app.selectedTeam);
+                const team = app.userTeams[teamKey];
+                
+                if (team && team.password === password) {
+                    app.user = team.username;
+                    app.team = team.name;
+                    renderApp();
+                } else {
+                    alert('رمز عبور اشتباه است');
+                }
+            }
+        }
+
+        function logout() {
+            app.user = null;
+            app.role = null;
+            app.team = null;
+            renderApp();
+        }
+
+        async function manualSave() {
+            const btn = event.target;
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '⏳ در حال ذخیره...';
+            btn.disabled = true;
+            
+            try {
+                const saved = await saveData();
+                if (saved) {
+                    btn.innerHTML = '✅ ذخیره شد!';
+                    setTimeout(() => {
+                        btn.innerHTML = originalText;
+                        btn.disabled = false;
+                    }, 2000);
+                } else {
+                    btn.innerHTML = '⚠️ فقط در localStorage ذخیره شد';
+                    setTimeout(() => {
+                        btn.innerHTML = originalText;
+                        btn.disabled = false;
+                    }, 3000);
+                }
+            } catch (e) {
+                btn.innerHTML = '❌ خطا در ذخیره';
+                setTimeout(() => {
+                    btn.innerHTML = originalText;
+                    btn.disabled = false;
+                }, 2000);
+            }
+        }
+
+        async function refreshData() {
+            const btn = event.target;
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '⏳ در حال بارگذاری...';
+            btn.disabled = true;
+            
+            try {
+                await loadData();
+                btn.innerHTML = '✅ بارگذاری شد!';
+                setTimeout(() => {
+                    btn.innerHTML = originalText;
+                    btn.disabled = false;
+                    renderApp();
+                }, 1000);
+            } catch (e) {
+                btn.innerHTML = '❌ خطا در بارگذاری';
+                setTimeout(() => {
+                    btn.innerHTML = originalText;
+                    btn.disabled = false;
+                }, 2000);
+            }
+        }
+
+        function renderAdmin(root) {
+            const logoHtml = app.settings.logoImage ? 
+                `<img src="${app.settings.logoImage}" style="width:50px;height:50px;object-fit:contain;border-radius:50%;margin-left:10px;" alt="لوگو">` : '';
+            const pendingTrCount = (app.pendingTransfers || []).filter(t => t.status === 'pending').length;
+            root.innerHTML = `
+                <div class="container">
+                    <div class="header">
+                        <h1 class="header-title">${logoHtml}⚽ پنل مدیریت لیگ</h1>
+                        <div class="user-info">
+                            <button class="btn" onclick="refreshData()" style="margin-left: 15px; padding: 10px 20px;">🔄 بارگذاری مجدد</button>
+                            <button class="btn" onclick="manualSave()" style="margin-left: 15px; padding: 10px 20px;">💾 ذخیره</button>
+                            <span>مدیر: ${app.user}</span>
+                            <button class="logout-btn" onclick="logout()">خروج</button>
+                        </div>
+                    </div>
+                    
+                    <div class="nav-tabs">
+                        <div class="nav-tab active" onclick="showTab('teams')">تیم‌ها</div>
+                        <div class="nav-tab" onclick="showTab('players')">بازیکنان</div>
+                        <div class="nav-tab" onclick="showTab('matches')">مسابقات</div>
+                        <div class="nav-tab" onclick="showTab('schedule')">برنامه هفته‌ها</div>
+                        <div class="nav-tab" onclick="showTab('standings')">جدول</div>
+                        <div class="nav-tab" onclick="showTab('budget')">بودجه</div>
+                        <div class="nav-tab" onclick="showTab('transfers')">نقل و انتقالات</div>
+                        <div class="nav-tab" onclick="showTab('pendingtransfers')">نقل‌های در انتظار ${pendingTrCount > 0 ? `<span class="pending-badge">${pendingTrCount}</span>` : ''}</div>
+                        
+                        <div class="nav-tab" onclick="showTab('notifications')">اعلان‌ها ${app.notifications.length > 0 ? `<span class="pending-badge">${app.notifications.length}</span>` : ''}</div>
+                        <div class="nav-tab" onclick="showTab('settings')">تنظیمات</div>
+                    </div>
+                    
+                    <div id="content"></div>
+                </div>
+            `;
+            
+            showTab('teams');
+        }
+
+        function renderTeam(root) {
+            root.innerHTML = `
+                <div class="container">
+                    <div class="header">
+                        <h1 class="header-title">⚽ پنل تیم</h1>
+                        <div class="user-info">
+                            <button class="btn" onclick="refreshData()" style="margin-left: 15px; padding: 10px 20px;">🔄 بارگذاری مجدد</button>
+                            <span>تیم: ${app.team}</span>
+                            <button class="logout-btn" onclick="logout()">خروج</button>
+                        </div>
+                    </div>
+                    
+                    <div class="nav-tabs">
+                        <div class="nav-tab active" onclick="showTeamTab('myteam')">تیم من</div>
+                        <div class="nav-tab" onclick="showTeamTab('lineup')">ترکیب بازیکنان</div>
+                        <div class="nav-tab" onclick="showTeamTab('standings')">جدول</div>
+                        <div class="nav-tab" onclick="showTeamTab('matches')">مسابقات</div>
+                        <div class="nav-tab" onclick="showTeamTab('budget')">بودجه</div>
+                        <div class="nav-tab" onclick="showTeamTab('transfers')">نقل و انتقالات</div>
+                        <div class="nav-tab" onclick="showTeamTab('betting')">شرط‌بندی</div>
+                        <div class="nav-tab" onclick="showTeamTab('assistant')">دستیار هوشمند</div>
+                    </div>
+                    
+                    <div id="content"></div>
+                </div>
+            `;
+            
+            showTeamTab('myteam');
+        }
+
+        function renderViewer(root) {
+            root.innerHTML = `
+                <div class="container">
+                    <div class="header">
+                        <h1 class="header-title">⚽ مشاهده لیگ</h1>
+                        <div class="user-info">
+                            <button class="logout-btn" onclick="logout()">خروج</button>
+                        </div>
+                    </div>
+                    
+                    <div class="nav-tabs">
+                        <div class="nav-tab active" onclick="showViewerTab('standings')">جدول</div>
+                        <div class="nav-tab" onclick="showViewerTab('matches')">مسابقات</div>
+                        <div class="nav-tab" onclick="showViewerTab('stats')">آمار</div>
+                    </div>
+                    
+                    <div id="content"></div>
+                </div>
+            `;
+            
+            showViewerTab('standings');
+        }
+
+        function showTab(tab) {
+            const evt = window.event;
+            document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+            if (evt && evt.target) {
+                evt.target.classList.add('active');
+            }
+            
+            const content = document.getElementById('content');
+            
+            switch(tab) {
+                case 'teams': renderTeamsManager(content); break;
+                case 'players': renderPlayersManager(content); break;
+                case 'matches': renderMatchesManager(content); break;
+                case 'schedule': renderScheduleManager(content); break;
+                case 'standings': renderStandings(content); break;
+                case 'budget': renderBudgetManager(content); break;
+                case 'transfers': renderTransfersManager(content); break;
+                case 'pendingtransfers': renderPendingTransfersManager(content); break;
+                case 'notifications': renderNotifications(content); break;
+                case 'settings': renderSettings(content); break;
+            }
+        }
+
+        function showTeamTab(tab) {
+            const evt = window.event;
+            document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+            if (evt && evt.target) {
+                evt.target.classList.add('active');
+            }
+            
+            const content = document.getElementById('content');
+            
+            switch(tab) {
+                case 'myteam': renderMyTeam(content); break;
+                case 'lineup': renderLineupEditor(content); break;
+                case 'standings': renderStandings(content); break;
+                case 'matches': renderMatchesView(content); break;
+                case 'budget': renderBudgetView(content); break;
+                case 'transfers': renderTransfersView(content); break;
+                case 'betting': renderBettingView(content); break;
+                case 'assistant': renderAIAssistant(content); break;
+            }
+        }
+
+        function showViewerTab(tab) {
+            const evt = window.event;
+            document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+            if (evt && evt.target) {
+                evt.target.classList.add('active');
+            }
+            
+            const content = document.getElementById('content');
+            
+            switch(tab) {
+                case 'standings': renderStandings(content); break;
+                case 'matches': renderMatchesView(content); break;
+                case 'stats': renderStats(content); break;
+            }
+        }
+
+        function renderTeamsManager(c) {
+            // تیم‌هایی که در جدول هستند (بدون آزاد و جهانی)
+            const leagueTeams = app.teams.filter(t => t.name !== 'آزاد و جهانی');
+            c.innerHTML = `
+                <div class="card">
+                    <h2 class="card-title">افزودن سریع تیم‌ها</h2>
+                    <button class="btn" onclick="createSampleTeams()">🚀 ساخت ۴ تیم نمونه</button>
+                    <p style="color:#b0b0b0;margin-top:10px;font-size:0.9em;">با یک کلیک ۴ تیم آماده با نام کاربری و رمز ایجاد می‌شود</p>
+                </div>
+                
+                <div class="card">
+                    <h2 class="card-title">افزودن تیم جدید</h2>
+                    <div class="form-row">
+                        <div class="form-group"><label>نام تیم</label><input type="text" id="teamName"></div>
+                        <div class="form-group"><label>نام کاربری</label><input type="text" id="teamUser"></div>
+                        <div class="form-group"><label>رمز عبور</label><input type="password" id="teamPass"></div>
+                    </div>
+                    <button class="btn" onclick="addTeam()">افزودن تیم</button>
+                </div>
+                
+                <div class="card">
+                    <h2 class="card-title">تیم‌های موجود (در جدول)</h2>
+                    ${leagueTeams.length === 0 ? '<p style="color:#b0b0b0;">تیمی وجود ندارد</p>' : `
+                        <table class="data-table">
+                            <thead><tr><th>تیم</th><th>بازی</th><th>برد</th><th>مساوی</th><th>باخت</th><th>گل زده</th><th>گل خورده</th><th>امتیاز</th><th>عملیات</th></tr></thead>
+                            <tbody>${leagueTeams.map(t => `
+                                <tr>
+                                    <td style="font-weight:600;">${t.name}</td>
+                                    <td>${t.w + t.d + t.l}</td>
+                                    <td>${t.w}</td>
+                                    <td>${t.d}</td>
+                                    <td>${t.l}</td>
+                                    <td>${t.gf}</td>
+                                    <td>${t.ga}</td>
+                                    <td style="color:#1eff00;font-weight:700;">${t.p}</td>
+                                    <td>
+                                        <button class="btn btn-secondary" onclick="editTeam('${t.name}')" style="margin-left: 5px;">ویرایش</button>
+                                        <button class="btn btn-danger" onclick="deleteTeam('${t.name}')">حذف</button>
+                                    </td>
+                                </tr>
+                            `).join('')}</tbody>
+                        </table>
+                    `}
+                </div>
+                
+                <div class="card" style="border-color:rgba(255,165,0,0.3);">
+                    <h2 class="card-title" style="color:#ffa500;">🌍 تیم آزاد و جهانی</h2>
+                    <p style="color:#b0b0b0;margin-bottom:15px;">این تیم در جدول و مسابقات حضور ندارد. فقط برای ساخت بازیکن و انتقال استفاده می‌شود.</p>
+                    <p style="color:#888;">بازیکنان آزاد: ${app.players.filter(p => p.team === 'آزاد و جهانی').length} نفر</p>
+                </div>
+                
+                <div class="card">
+                    <h2 class="card-title">بازیکنان در انتظار تایید ${app.pendingPlayers.length > 0 ? `<span class="pending-badge">${app.pendingPlayers.length}</span>` : ''}</h2>
+                    ${app.pendingPlayers.length === 0 ? '<p style="color:#b0b0b0;">بازیکنی در انتظار نیست</p>' : app.pendingPlayers.map(p => `
+                        <div class="player-card">
+                            <div class="player-info">
+                                <div class="player-name">${p.name}</div>
+                                <div class="player-details">${p.position} • ${p.team} • Overall: ${p.overall}</div>
+                            </div>
+                            <div class="action-btns">
+                                <button class="btn" onclick="approvePlayer(${p.id})">تایید</button>
+                                <button class="btn btn-danger" onclick="rejectPlayer(${p.id})">رد</button>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        }
+
+        function createSampleTeams() {
+            if (app.teams.length > 0) {
+                if (!confirm('تیم‌هایی وجود دارد. آیا می‌خواهید تیم‌های جدید اضافه کنید؟')) return;
+            }
+
+            const sampleTeams = [
+                { name: 'پرسپولیس', username: 'perspolis', password: '1234' },
+                { name: 'استقلال', username: 'esteghlal', password: '1234' },
+                { name: 'سپاهان', username: 'sepahan', password: '1234' },
+                { name: 'تراکتور', username: 'tractor', password: '1234' }
+            ];
+
+            sampleTeams.forEach(team => {
+                if (!app.teams.find(t => t.name === team.name)) {
+                    app.teams.push({ name: team.name, w: 0, d: 0, l: 0, gf: 0, ga: 0, p: 0 });
+                    app.userTeams[team.name] = team;
+                    app.budgets.push({ team: team.name, budget: 50000000 });
+                }
+            });
+
+            saveData();
+            alert('✅ ۴ تیم با موفقیت ایجاد شد!\n\nاطلاعات ورود:\n• پرسپولیس: perspolis / 1234\n• استقلال: esteghlal / 1234\n• سپاهان: sepahan / 1234\n• تراکتور: tractor / 1234');
+            showTab('teams');
+        }
+
+        function addTeam() {
+            const name = document.getElementById('teamName').value.trim();
+            const username = document.getElementById('teamUser').value.trim();
+            const password = document.getElementById('teamPass').value.trim();
+            
+            if (!name || !username || !password) {
+                alert('لطفا تمام فیلدها را پر کنید');
+                return;
+            }
+            
+            if (name === 'آزاد و جهانی') {
+                alert('این نام رزرو شده است');
+                return;
+            }
+            
+            if (app.teams.find(t => t.name === name)) {
+                alert('تیم با این نام وجود دارد');
+                return;
+            }
+            
+            app.teams.push({ name, w: 0, d: 0, l: 0, gf: 0, ga: 0, p: 0 });
+            app.userTeams[name] = { name, username, password };
+            app.budgets.push({ team: name, budget: 50000000 });
+            
+            saveData();
+            showTab('teams');
+        }
+
+        function editTeam(oldName) {
+            const team = app.teams.find(t => t.name === oldName);
+            if (!team) return;
+            
+            const userTeam = app.userTeams[oldName];
+            
+            const newName = prompt('نام جدید تیم:', oldName);
+            if (newName && newName.trim() !== '' && newName !== oldName) {
+                // بررسی تکراری نبودن نام
+                if (app.teams.find(t => t.name === newName)) {
+                    alert('این نام قبلاً استفاده شده است');
+                    return;
+                }
+                
+                // تغییر نام در تیم‌ها
+                team.name = newName;
+                
+                // تغییر نام در userTeams
+                if (userTeam) {
+                    app.userTeams[newName] = { ...userTeam, name: newName };
+                    delete app.userTeams[oldName];
+                }
+                
+                // تغییر نام در بازیکنان
+                app.players.forEach(p => {
+                    if (p.team === oldName) p.team = newName;
+                });
+                
+                // تغییر نام در بودجه
+                const budget = app.budgets.find(b => b.team === oldName);
+                if (budget) budget.team = newName;
+                
+                // تغییر نام در ترکیب‌ها
+                if (app.lineups[oldName]) {
+                    app.lineups[newName] = app.lineups[oldName];
+                    delete app.lineups[oldName];
+                }
+            }
+            
+            if (userTeam) {
+                const newPassword = prompt('رمز عبور جدید (خالی بگذارید برای عدم تغییر):', '');
+                if (newPassword && newPassword.trim() !== '') {
+                    app.userTeams[newName || oldName].password = newPassword.trim();
+                }
+            }
+            
+            saveData();
+            showTab('teams');
+        }
+
+        function deleteTeam(name) {
+            if (!confirm(`آیا از حذف تیم ${name} مطمئن هستید؟`)) return;
+            
+            app.teams = app.teams.filter(t => t.name !== name);
+            delete app.userTeams[name];
+            app.players = app.players.filter(p => p.team !== name);
+            app.budgets = app.budgets.filter(b => b.team !== name);
+            
+            saveData();
+            showTab('teams');
+        }
+
+        function approvePlayer(id) {
+            const player = app.pendingPlayers.find(p => p.id === id);
+            if (!player) return;
+            
+            app.players.push(player);
+            app.pendingPlayers = app.pendingPlayers.filter(p => p.id !== id);
+            
+            app.notifications.push({
+                id: Date.now(),
+                text: `بازیکن ${player.name} برای تیم ${player.team} تایید شد`,
+                time: new Date().toLocaleString('fa-IR')
+            });
+            
+            saveData();
+            showTab('teams');
+        }
+
+        function rejectPlayer(id) {
+            app.pendingPlayers = app.pendingPlayers.filter(p => p.id !== id);
+            saveData();
+            showTab('teams');
+        }
+
+        function renderPlayersManager(c) {
+            // همه تیم‌ها شامل آزاد و جهانی برای ساخت بازیکن
+            const allTeamsForPlayer = [...app.teams, { name: 'آزاد و جهانی' }].filter((t, i, arr) => arr.findIndex(x => x.name === t.name) === i);
+            c.innerHTML = `
+                <div class="card">
+                    <h2 class="card-title">افزودن سریع بازیکنان</h2>
+                    <div class="form-group">
+                        <label>انتخاب تیم برای افزودن بازیکنان نمونه</label>
+                        <select id="bulkTeam">
+                            <option value="">-- انتخاب کنید --</option>
+                            ${allTeamsForPlayer.map(t => `<option value="${t.name}">${t.name}</option>`).join('')}
+                        </select>
+                    </div>
+                    <button class="btn" onclick="createSamplePlayers()">🚀 ساخت ۱۱ بازیکن نمونه</button>
+                    <p style="color:#b0b0b0;margin-top:10px;font-size:0.9em;">یک ترکیب کامل ۱۱ نفره برای تیم انتخابی ایجاد می‌شود</p>
+                </div>
+                
+                <div class="card">
+                    <h2 class="card-title">افزودن بازیکن</h2>
+                    <div class="form-row">
+                        <div class="form-group"><label>نام بازیکن</label><input type="text" id="playerName"></div>
+                        <div class="form-group"><label>تیم</label><select id="playerTeam">${allTeamsForPlayer.map(t => `<option>${t.name}</option>`).join('')}</select></div>
+                        <div class="form-group"><label>پست</label><select id="playerPos"><option>GK</option><option>DF</option><option>MF</option><option>FW</option></select></div>
+                        <div class="form-group"><label>Overall</label><input type="number" id="playerOverall" min="1" max="99" value="75"></div>
+                    </div>
+                    <button class="btn" onclick="addPlayer()">افزودن بازیکن</button>
+                </div>
+
+                <div class="card">
+                    <h2 class="card-title">افزودن چند بازیکن یکجا</h2>
+                    <p style="color: #b0b0b0; margin-bottom: 15px;">فرمت: نام،اورال،پست (هر بازیکن در یک خط)</p>
+                    <p style="color: #888; margin-bottom: 20px; font-size: 0.9em;">مثال:<br>محمد رضایی،85،GK<br>علی احمدی،78،MF<br>حسین کریمی،82،DF</p>
+                    <div class="form-group">
+                        <label>تیم</label>
+                        <select id="multiPlayerTeam">
+                            ${allTeamsForPlayer.map(t => `<option>${t.name}</option>`).join('')}
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>لیست بازیکنان</label>
+                        <textarea id="multiPlayerList" rows="8" placeholder="نام،اورال،پست
+نام،اورال،پست
+..."></textarea>
+                    </div>
+                    <button class="btn" onclick="addMultiplePlayers()">افزودن همه بازیکنان</button>
+                </div>
+                
+                <div class="card">
+                    <h2 class="card-title">بازیکنان موجود</h2>
+                    ${app.players.length === 0 ? '<p style="color:#b0b0b0;">بازیکنی وجود ندارد</p>' : app.players.map(p => `
+                        <div class="player-card">
+                            <div class="player-info">
+                                <div class="player-name">${p.name}</div>
+                                <div class="player-details">${p.position} • ${p.team}</div>
+                            </div>
+                            <div class="player-overall">${p.overall}</div>
+                            <div class="action-btns">
+                                <button class="btn btn-secondary" onclick="editPlayer(${p.id})">ویرایش</button>
+                                <button class="btn btn-danger" onclick="deletePlayer(${p.id})">حذف</button>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        }
+
+        function createSamplePlayers() {
+            const teamName = document.getElementById('bulkTeam').value;
+            
+            if (!teamName) {
+                alert('لطفا یک تیم انتخاب کنید');
+                return;
+            }
+
+            const samplePlayers = [
+                { name: 'علی رضایی', position: 'GK', overall: 82 },
+                { name: 'محمد احمدی', position: 'DF', overall: 78 },
+                { name: 'حسین محمدی', position: 'DF', overall: 80 },
+                { name: 'رضا کریمی', position: 'DF', overall: 77 },
+                { name: 'امیر حسینی', position: 'DF', overall: 79 },
+                { name: 'مهدی صادقی', position: 'MF', overall: 81 },
+                { name: 'سعید عزیزی', position: 'MF', overall: 83 },
+                { name: 'علی اکبری', position: 'MF', overall: 80 },
+                { name: 'حمید رحیمی', position: 'MF', overall: 78 },
+                { name: 'کریم باقری', position: 'FW', overall: 85 },
+                { name: 'یاسر اصغری', position: 'FW', overall: 84 }
+            ];
+
+            let addedCount = 0;
+            samplePlayers.forEach(player => {
+                app.players.push({
+                    id: Date.now() + addedCount,
+                    name: player.name,
+                    team: teamName,
+                    position: player.position,
+                    overall: player.overall
+                });
+                addedCount++;
+            });
+
+            saveData();
+            alert(`✅ ${addedCount} بازیکن برای تیم ${teamName} اضافه شد!`);
+            showTab('players');
+        }
+
+        function addPlayer() {
+            const name = document.getElementById('playerName').value.trim();
+            const team = document.getElementById('playerTeam').value;
+            const position = document.getElementById('playerPos').value;
+            const overall = parseInt(document.getElementById('playerOverall').value);
+            
+            if (!name || !team) {
+                alert('لطفا نام و تیم را وارد کنید');
+                return;
+            }
+            
+            app.players.push({ id: Date.now(), name, team, position, overall });
+            saveData();
+            showTab('players');
+        }
+
+        function addMultiplePlayers() {
+            const team = document.getElementById('multiPlayerTeam').value;
+            const list = document.getElementById('multiPlayerList').value.trim();
+            
+            if (!team) {
+                alert('لطفا تیم را انتخاب کنید');
+                return;
+            }
+            
+            if (!list) {
+                alert('لطفا لیست بازیکنان را وارد کنید');
+                return;
+            }
+            
+            const lines = list.split('\n').filter(line => line.trim());
+            let successCount = 0;
+            let errorLines = [];
+            
+            lines.forEach((line, index) => {
+                const parts = line.split('،').map(p => p.trim());
+                
+                if (parts.length !== 3) {
+                    errorLines.push(`خط ${index + 1}: فرمت نادرست - باید سه بخش باشد (نام،اورال،پست)`);
+                    return;
+                }
+                
+                  [name, overallStr, position] = parts;
+                const overall = parseInt(overallStr);
+                
+                if (!name) {
+                    errorLines.push(`خط ${index + 1}: نام بازیکن خالی است`);
+                    return;
+                }
+                
+                if (isNaN(overall) || overall < 1 || overall > 99) {
+                    errorLines.push(`خط ${index + 1}: اورال باید عدد بین 1 تا 99 باشد`);
+                    return;
+                }
+                
+                const validPositions = ['GK', 'DF', 'MF', 'FW'];
+                if (!validPositions.includes(position)) {
+                    errorLines.push(`خط ${index + 1}: پست باید یکی از GK، DF، MF، FW باشد`);
+                    return;
+                }
+                
+                app.players.push({
+                    id: Date.now() + index,
+                    name,
+                    team,
+                    position,
+                    overall
+                });
+                
+                successCount++;
+            });
+            
+            if (successCount > 0) {
+                saveData();
+            }
+            
+            if (errorLines.length > 0) {
+                alert(`${successCount} بازیکن با موفقیت اضافه شد.\n\nخطاها:\n${errorLines.join('\n')}`);
+            } else {
+                alert(`✅ ${successCount} بازیکن با موفقیت اضافه شد`);
+            }
+            
+            if (successCount > 0) {
+                showTab('players');
+            }
+        }
+
+        function editPlayer(id) {
+            const player = app.players.find(p => p.id === id);
+            if (!player) return;
+            
+            const newName = prompt('نام جدید:', player.name);
+            const newOverall = prompt('Overall جدید:', player.overall);
+            
+            if (newName) player.name = newName;
+            if (newOverall) player.overall = parseInt(newOverall);
+            
+            saveData();
+            showTab('players');
+        }
+
+        function deletePlayer(id) {
+            if (!confirm('آیا از حذف این بازیکن مطمئن هستید؟')) return;
+            
+            app.players = app.players.filter(p => p.id !== id);
+            saveData();
+            showTab('players');
+        }
+
+        function renderMatchesManager(c) {
+            c.innerHTML = `
+                <div class="card">
+                    <h2 class="card-title">افزودن مسابقه</h2>
+                    <div class="form-row">
+                        <div class="form-group"><label>تیم میزبان</label><select id="homeTeam">${app.teams.map(t => `<option>${t.name}</option>`).join('')}</select></div>
+                        <div class="form-group"><label>تیم مهمان</label><select id="awayTeam">${app.teams.map(t => `<option>${t.name}</option>`).join('')}</select></div>
+                        <div class="form-group"><label>گل میزبان</label><input type="number" id="homeScore" min="0" value="0"></div>
+                        <div class="form-group"><label>گل مهمان</label><input type="number" id="awayScore" min="0" value="0"></div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group"><label>گلزنان میزبان</label><input type="text" id="homeScorers" placeholder="نام گلزنان را با ویرگول جدا کنید"></div>
+                        <div class="form-group"><label>گلزنان مهمان</label><input type="text" id="awayScorers" placeholder="نام گلزنان را با ویرگول جدا کنید"></div>
+                        <div class="form-group"><label>ضریب شرط (برای تعیین تعداد گل — توسط ادمین)</label><input type="number" id="goalOddsMultiplier" min="1" value="2"></div>
+                    </div>
+                    <button class="btn" onclick="addMatch()">افزودن مسابقه</button>
+                </div>
+                
+                <div class="card">
+                    <h2 class="card-title">مسابقات ثبت شده</h2>
+                    ${app.matches.length === 0 ? '<p style="color:#b0b0b0;">مسابقه‌ای وجود ندارد</p>' : app.matches.map((m, idx) => `
+                        <div class="match-card">
+                            <div class="match-teams">
+                                <span class="team-name">${m.home}</span>
+                                <span class="match-score">${m.homeScore} - ${m.awayScore}</span>
+                                <span class="team-name">${m.away}</span>
+                            </div>
+                            ${m.scorers ? `<div style="color:#b0b0b0;margin-top:10px;">گلزنان: ${m.scorers}</div>` : ''}
+                            <div class="action-btns">
+                                <button class="btn btn-secondary" onclick="editMatch(${idx})">ویرایش گلزنان</button>
+                                <button class="btn btn-danger" onclick="deleteMatch(${idx})">حذف</button>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        }
+
+        function addMatch() {
+            const home = document.getElementById('homeTeam').value;
+            const away = document.getElementById('awayTeam').value;
+            const homeScore = parseInt(document.getElementById('homeScore').value);
+            const awayScore = parseInt(document.getElementById('awayScore').value);
+            const homeScorers = document.getElementById('homeScorers').value.trim();
+            const awayScorers = document.getElementById('awayScorers').value.trim();
+            
+            if (home === away) {
+                alert('تیم‌ها نباید یکسان باشند');
+                return;
+            }
+            
+            let scorers = '';
+            if (homeScorers) scorers += `${home}: ${homeScorers}`;
+            if (awayScorers) scorers += (scorers ? ' | ' : '') + `${away}: ${awayScorers}`;
+            
+            const goalOddsMultiplier = parseFloat(document.getElementById('goalOddsMultiplier') ? document.getElementById('goalOddsMultiplier').value : 2) || 2;
+            app.matches.push({ home, away, homeScore, awayScore, scorers, goalOddsMultiplier });
+            
+            const homeTeam = app.teams.find(t => t.name === home);
+            const awayTeam = app.teams.find(t => t.name === away);
+            
+            if (homeTeam && awayTeam) {
+                homeTeam.gf += homeScore;
+                homeTeam.ga += awayScore;
+                awayTeam.gf += awayScore;
+                awayTeam.ga += homeScore;
+                
+                if (homeScore > awayScore) {
+                    homeTeam.w++;
+                    homeTeam.p += 3;
+                    awayTeam.l++;
+                } else if (homeScore < awayScore) {
+                    awayTeam.w++;
+                    awayTeam.p += 3;
+                    homeTeam.l++;
+                } else {
+                    homeTeam.d++;
+                    awayTeam.d++;
+                    homeTeam.p++;
+                    awayTeam.p++;
+                }
+            }
+            
+            saveData();
+            // Resolve bets related to this newly added match (last index)
+            processBetsForMatch(app.matches.length - 1);
+            showTab('matches');
+        }
+
+        function editMatch(idx) {
+            const match = app.matches[idx];
+            if (!match) return;
+            
+            const homeScorers = prompt(`گلزنان ${match.home}:`, '');
+            const awayScorers = prompt(`گلزنان ${match.away}:`, '');
+            
+            let scorers = '';
+            if (homeScorers) scorers += `${match.home}: ${homeScorers}`;
+            if (awayScorers) scorers += (scorers ? ' | ' : '') + `${match.away}: ${awayScorers}`;
+            
+            match.scorers = scorers;
+            
+            saveData();
+            // Resolve bets related to this newly added match (last index)
+            processBetsForMatch(app.matches.length - 1);
+            showTab('matches');
+        }
+
+        function deleteMatch(idx) {
+            if (!confirm('آیا از حذف این مسابقه مطمئن هستید؟')) return;
+            
+            app.matches.splice(idx, 1);
+            saveData();
+            // Resolve bets related to this newly added match (last index)
+            processBetsForMatch(app.matches.length - 1);
+            showTab('matches');
+        }
+
+        function renderBudgetManager(c) {
+            c.innerHTML = `
+                <div class="card">
+                    <h2 class="card-title">مدیریت بودجه تیم‌ها</h2>
+                    ${app.budgets.length === 0 ? '<p style="color:#b0b0b0;">بودجه‌ای وجود ندارد</p>' : `
+                        <table class="data-table">
+                            <thead><tr><th>تیم</th><th>بودجه فعلی (یورو)</th><th>عملیات</th></tr></thead>
+                            <tbody>${app.budgets.map((b, idx) => `
+                                <tr>
+                                    <td>${b.team}</td>
+                                    <td>${b.budget.toLocaleString()}</td>
+                                    <td><button class="btn btn-secondary" onclick="editBudget(${idx})">ویرایش</button></td>
+                                </tr>
+                            `).join('')}</tbody>
+                        </table>
+                    `}
+                </div>
+            `;
+        }
+
+        function editBudget(idx) {
+            const budget = app.budgets[idx];
+            if (!budget) return;
+            
+            const newBudget = prompt(`بودجه جدید ${budget.team} (یورو):`, budget.budget);
+            if (newBudget) {
+                budget.budget = parseInt(newBudget.replace(/,/g, ''));
+                saveData();
+                showTab('budget');
+            }
+        }
+
+        function renderTransfersManager(c) {
+            // همه تیم‌ها شامل آزاد و جهانی
+            const allTeams = [...app.teams.map(t => t.name), 'آزاد و جهانی'];
+            const uniqueTeams = [...new Set(allTeams)];
+            
+            c.innerHTML = `
+                <div class="card">
+                    <h2 class="card-title">افزودن نقل و انتقال (ادمین)</h2>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>بازیکن</label>
+                            <select id="transferPlayer">
+                                <option value="">-- انتخاب بازیکن --</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>از تیم</label>
+                            <select id="transferFrom">
+                                <option value="">-- تیم مبدأ --</option>
+                                ${uniqueTeams.map(t => `<option value="${t}">${t}</option>`).join('')}
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>به تیم</label>
+                            <select id="transferTo">
+                                <option value="">-- تیم مقصد --</option>
+                                ${uniqueTeams.map(t => `<option value="${t}">${t}</option>`).join('')}
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group"><label>مبلغ (یورو)</label><input type="number" id="transferAmount" min="0"></div>
+                        <div class="form-group"><label>مدت قرارداد (سال)</label><input type="number" id="transferDuration" min="1" max="10" value="3"></div>
+                        <div class="form-group"><label>تصویر (URL)</label><input type="url" id="transferImg"></div>
+                    </div>
+                    <button class="btn" onclick="addTransfer()">افزودن و انتقال بازیکن</button>
+                </div>
+                
+                <div class="card">
+                    <h2 class="card-title">نقل و انتقالات ثبت شده</h2>
+                    ${app.transfers.length === 0 ? '<p style="color:#b0b0b0;">نقل و انتقالی وجود ندارد</p>' : app.transfers.map((tr, idx) => `
+                        <div class="transfer-card">
+                            ${tr.img ? `<img src="${tr.img}" class="transfer-image" alt="${tr.player}">` : ''}
+                            <div class="transfer-details">
+                                <div class="transfer-player">${tr.player}</div>
+                                <div class="transfer-route">${tr.from} → ${tr.to}</div>
+                                <div class="transfer-price">${(tr.amount||0).toLocaleString()} یورو • ${tr.duration} سال</div>
+                            </div>
+                            <div class="action-btns">
+                                <button class="btn btn-secondary" onclick="editTransfer(${idx})">ویرایش</button>
+                                <button class="btn btn-danger" onclick="deleteTransfer(${idx})">حذف</button>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+            
+            // وقتی تیم مبدأ انتخاب می‌شه فقط بازیکنان همان تیم نشان داده شوند
+            function populateTransferPlayersByFrom() {
+                const from = document.getElementById('transferFrom').value;
+                const playerSelect = document.getElementById('transferPlayer');
+                // reset
+                playerSelect.innerHTML = '<option value="">-- انتخاب بازیکن --</option>';
+                if (!from) return;
+                // add players that belong to the selected 'from' team
+                app.players.filter(p => p.team === from).forEach(p => {
+                    const opt = document.createElement('option');
+                    opt.value = p.name;
+                    opt.setAttribute('data-id', p.id);
+                    opt.setAttribute('data-team', p.team);
+                    opt.textContent = `${p.name} (${p.team})`;
+                    playerSelect.appendChild(opt);
+                });
+            }
+            document.getElementById('transferFrom').addEventListener('change', populateTransferPlayersByFrom);
+            // populate initially based on current value (if any)
+            populateTransferPlayersByFrom();
+        }
+
+        function addTransfer() {
+            const playerSelect = document.getElementById('transferPlayer');
+            const playerName = playerSelect.value;
+            const playerId = playerSelect.options[playerSelect.selectedIndex].getAttribute('data-id');
+            const from = document.getElementById('transferFrom').value;
+            const to = document.getElementById('transferTo').value;
+            const amount = parseInt(document.getElementById('transferAmount').value) || 0;
+            const duration = parseInt(document.getElementById('transferDuration').value) || 1;
+            const img = document.getElementById('transferImg').value.trim();
+            
+            if (!playerName || !from || !to) {
+                alert('لطفا بازیکن، تیم مبدأ و تیم مقصد را انتخاب کنید');
+                return;
+            }
+            
+            if (from === to) {
+                alert('تیم مبدأ و مقصد نباید یکسان باشند');
+                return;
+            }
+            
+            // کم کردن بودجه از تیم مقصد
+            if (to !== 'آزاد و جهانی' && amount > 0) {
+                const destBudget = app.budgets.find(b => b.team === to);
+                if (destBudget) {
+                    if (destBudget.budget < amount) {
+                        if (!confirm(`بودجه تیم ${to} کافی نیست (${destBudget.budget.toLocaleString()} یورو). آیا ادامه می‌دهید؟`)) return;
+                    }
+                    destBudget.budget -= amount;
+                }
+                // اضافه کردن به بودجه تیم مبدأ (اگر آزاد نیست)
+                if (from !== 'آزاد و جهانی') {
+                    const srcBudget = app.budgets.find(b => b.team === from);
+                    if (srcBudget) srcBudget.budget += amount;
+                }
+            }
+            
+            // انتقال بازیکن به تیم مقصد
+            if (playerId) {
+                const player = app.players.find(p => p.id === parseInt(playerId));
+                if (player) {
+                    player.team = to;
+                    console.log(`✓ بازیکن ${playerName} از ${from} به ${to} منتقل شد`);
+                } else {
+                    console.error(`! بازیکن با ID ${playerId} یافت نشد`);
+                    alert(`⚠️ خطا: بازیکن با ID ${playerId} در سیستم یافت نشد. نقل و انتقال ثبت می‌شود اما بازیکن منتقل نمی‌شود.`);
+                }
+            } else {
+                // اگر playerId نداریم، با نام بازیکن جستجو می‌کنیم
+                const player = app.players.find(p => p.name === playerName && p.team === from);
+                if (player) {
+                    player.team = to;
+                    console.log(`✓ بازیکن ${playerName} از ${from} به ${to} منتقل شد (با نام)`);
+                } else {
+                    console.error(`! بازیکن ${playerName} در تیم ${from} یافت نشد`);
+                    alert(`⚠️ خطا: بازیکن ${playerName} در تیم ${from} یافت نشد. لطفا مطمئن شوید بازیکن وجود دارد.`);
+                    return;
+                }
+            }
+            
+            app.transfers.push({ player: playerName, playerId: parseInt(playerId), from, to, amount, duration, img });
+            
+            app.notifications.push({
+                id: Date.now(),
+                text: `✅ انتقال رسمی: ${playerName} از ${from} به ${to} به مبلغ ${amount.toLocaleString()} یورو`,
+                time: new Date().toLocaleString('fa-IR')
+            });
+            
+            saveData();
+            showTab('transfers');
+        }
+
+        function deleteTransfer(idx) {
+            if (!confirm('آیا از حذف این نقل و انتقال مطمئن هستید؟')) return;
+            
+            app.transfers.splice(idx, 1);
+            saveData();
+            showTab('transfers');
+        }
+
+        function editTransfer(idx) {
+            const tr = app.transfers[idx];
+            if (!tr) return;
+            
+            const newAmount = prompt('مبلغ جدید (یورو):', tr.amount || 0);
+            const newDuration = prompt('مدت قرارداد جدید (سال):', tr.duration || 3);
+            const newImg = prompt('آدرس تصویر جدید (URL):', tr.img || '');
+            
+            if (newAmount !== null && newAmount.trim() !== '') {
+                tr.amount = parseInt(newAmount) || 0;
+            }
+            if (newDuration !== null && newDuration.trim() !== '') {
+                tr.duration = parseInt(newDuration) || 1;
+            }
+            if (newImg !== null) {
+                tr.img = newImg.trim();
+            }
+            
+            saveData();
+            showTab('transfers');
+        }
+
+        // ------- شرط‌بندی (اضافه‌شده طبق درخواست) -------
+        function computeTeamStrength(teamName) {
+            const players = app.players.filter(p => p.team === teamName);
+            if (!players || players.length === 0) {
+                const t = app.teams.find(x => x.name === teamName);
+                return (t && t.overall) ? t.overall : 75;
+            }
+            const avg = players.reduce((s,p) => s + (p.overall||75), 0) / players.length;
+            return avg;
+        }
+
+        function computeOdds(home, away, matchObj) {
+            const hStr = computeTeamStrength(home) || 75;
+            const aStr = computeTeamStrength(away) || 75;
+            const homeOdd = Math.max(1.2, parseFloat(((aStr / hStr) * 1.5).toFixed(2)));
+            const awayOdd = Math.max(1.2, parseFloat(((hStr / aStr) * 1.5).toFixed(2)));
+            const drawOdd = 2.5;
+            return { home: homeOdd, away: awayOdd, draw: drawOdd };
+        }
+
+        function renderBettingView(c) {
+            c.innerHTML = `
+                <div class="card">
+                    <h2 class="card-title">شرط‌بندی روی مسابقات</h2>
+                    <p style="color:#b0b0b0;">شما می‌توانید روی برنده مسابقه یا تعداد گل (اگر ادمین ضریب تعیین کرده) شرط ببندید. مبلغ شرط هنگام ثبت از بودجه کسر می‌شود.</p>
+                    <div id="betsArea"></div>
+                </div>
+            `;
+            const betsArea = document.getElementById('betsArea');
+            const matches = app.matches || [];
+            if (matches.length === 0) {
+                betsArea.innerHTML = '<p style="color:#b0b0b0;">مسابقه‌ای ثبت نشده</p>';
+                return;
+            }
+            betsArea.innerHTML = matches.map((m, idx) => {
+                const odds = computeOdds(m.home, m.away, m);
+                const gmult = m.goalOddsMultiplier ? `• ضریب گل: ${m.goalOddsMultiplier}` : '';
+                return `
+                    <div style="padding:12px;margin-bottom:10px;background:rgba(255,255,255,0.03);border-radius:10px;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;">
+                            <div style="font-weight:700;">مسابقه ${idx+1}: ${m.home} VS ${m.away}</div>
+                            <div style="font-weight:700;color:#1eff00;">${m.homeScore ?? 0} - ${m.awayScore ?? 0}</div>
+                        </div>
+                        <div style="margin-top:8px;color:#b0b0b0;">
+                            ضرایب: برد میزبان: ${odds.home} — مساوی: ${odds.draw} — برد مهمان: ${odds.away} ${gmult}
+                        </div>
+                        <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+                            <input type="number" id="betAmount_${idx}" placeholder="مبلغ شرط (یورو)" style="padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.1);width:160px;">
+                            <select id="betType_${idx}" style="padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.1);">
+                                <option value="home">برد ${m.home}</option>
+                                <option value="draw">مساوی</option>
+                                <option value="away">برد ${m.away}</option>
+                            </select>
+                            ${m.goalOddsMultiplier ? `<input type="number" id="betExactGoals_${idx}" placeholder="تعداد گل دقیق (مجموع)" style="padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.1);width:200px;">` : ''}
+                            <button class="btn" onclick="placeBet(${idx})">ثبت شرط</button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function placeBet(matchIdx) {
+            const amountEl = document.getElementById('betAmount_' + matchIdx);
+            const typeEl = document.getElementById('betType_' + matchIdx);
+            const exactGoalsEl = document.getElementById('betExactGoals_' + matchIdx);
+            const stake = parseInt(amountEl ? amountEl.value : 0) || 0;
+            const betType = typeEl ? typeEl.value : 'home';
+            const match = app.matches[matchIdx];
+            if (!match) { alert('مسابقه نامعتبر است'); return; }
+            if (stake <= 0) { alert('مبلغ شرط باید بیشتر از 0 باشد'); return; }
+            const bettor = app.team;
+            const budgetObj = app.budgets.find(b => b.team === bettor);
+            if (!budgetObj || budgetObj.budget < stake) { alert('بودجه کافی نیست'); return; }
+            const odds = computeOdds(match.home, match.away, match);
+            let chosenOdd = odds[betType];
+            if (exactGoalsEl && exactGoalsEl.value.trim() !== '') {
+                const g = parseInt(exactGoalsEl.value);
+                if (isNaN(g)) { alert('تعداد گل نامعتبر است'); return; }
+                const mult = match.goalOddsMultiplier || 2;
+                chosenOdd = chosenOdd * mult;
+            }
+            budgetObj.budget -= stake;
+            const bet = {
+                id: Date.now(),
+                bettor,
+                matchIdx,
+                betType,
+                stake,
+                odds: parseFloat(chosenOdd.toFixed(2)),
+                exactGoals: exactGoalsEl && exactGoalsEl.value.trim() !== '' ? parseInt(exactGoalsEl.value) : null,
+                placedAt: new Date().toLocaleString('fa-IR'),
+                resolved: false,
+                won: false,
+                payout: 0
+            };
+            app.bets = app.bets || [];
+            app.bets.push(bet);
+            app.notifications.push({ id: Date.now(), text: `شرط ثبت شد: تیم ${bettor} روی مسابقه ${match.home} vs ${match.away} مبلغ ${stake} یورو`, time: new Date().toLocaleString('fa-IR') });
+            saveData();
+            alert('✅ شرط شما ثبت شد. در صورت برنده شدن، مبلغ به بودجه اضافه می‌شود.');
+            renderBettingView(document.getElementById('content'));
+        }
+
+        function processBetsForMatch(matchIdx) {
+            app.bets = app.bets || [];
+            const match = app.matches[matchIdx];
+            if (!match) return;
+            app.bets.forEach(bet => {
+                if (bet.matchIdx !== matchIdx || bet.resolved) return;
+                let won = false;
+                if (bet.betType === 'home' && match.homeScore > match.awayScore) won = true;
+                if (bet.betType === 'away' && match.awayScore > match.homeScore) won = true;
+                if (bet.betType === 'draw' && match.homeScore === match.awayScore) won = true;
+                if (bet.exactGoals !== null && match.goalOddsMultiplier) {
+                    const totalGoals = (match.homeScore || 0) + (match.awayScore || 0);
+                    if (totalGoals === bet.exactGoals) {
+                        won = true;
+                    } else {
+                        won = false;
+                    }
+                }
+                bet.resolved = true;
+                bet.won = won;
+                if (won) {
+                    const payout = Math.round(bet.stake * bet.odds);
+                    bet.payout = payout;
+                    const bud = app.budgets.find(b => b.team === bet.bettor);
+                    if (bud) bud.budget += payout;
+                    app.notifications.push({ id: Date.now(), text: `🏆 شرط برنده شد: تیم ${bet.bettor} مبلغ ${payout.toLocaleString()} یورو دریافت کرد.`, time: new Date().toLocaleString('fa-IR') });
+                } else {
+                    app.notifications.push({ id: Date.now(), text: `❌ شرط باخته: تیم ${bet.bettor} روی مسابقه ${match.home} vs ${match.away}`, time: new Date().toLocaleString('fa-IR') });
+                }
+            });
+            saveData();
+        }
+
+        function renderNotifications(c) {
+            c.innerHTML = `
+                <div class="card">
+                    <h2 class="card-title">اعلان‌های دریافتی</h2>
+                    ${app.notifications.length === 0 ? '<p style="color:#b0b0b0;">اعلانی وجود ندارد</p>' : app.notifications.map((n, idx) => {
+                        // Check if this is a player addition request
+                        const isPlayerRequest = n.text.includes('درخواست افزودن بازیکن');
+                        const pendingPlayer = isPlayerRequest ? app.pendingPlayers.find(p => n.text.includes(p.name)) : null;
+                        
+                        // Check if this is a transfer request
+                        const isTransferRequest = n.text.includes('درخواست نقل و انتقال');
+                        const pendingTransfer = isTransferRequest ? (app.pendingTransfers || []).find(t => t.status === 'pending' && n.text.includes(t.playerName)) : null;
+                        
+                        return `
+                            <div class="notification-item">
+                                <div>${n.text}</div>
+                                <div class="notification-time">${n.time}</div>
+                                ${pendingPlayer ? `
+                                    <div class="action-btns">
+                                        <button class="btn" onclick="approvePlayerFromNotif(${pendingPlayer.id}, ${idx})">✅ تایید</button>
+                                        <button class="btn btn-danger" onclick="rejectPlayerFromNotif(${pendingPlayer.id}, ${idx})">❌ رد</button>
+                                    </div>
+                                ` : pendingTransfer ? `
+                                    <div class="action-btns">
+                                        <button class="btn" onclick="approvePendingTransfer(${pendingTransfer.id})">✅ تأیید انتقال</button>
+                                        <button class="btn btn-danger" onclick="rejectPendingTransfer(${pendingTransfer.id})">❌ رد انتقال</button>
+                                    </div>
+                                ` : `
+                                    <button class="btn btn-danger" style="margin-top:10px;" onclick="deleteNotification(${idx})">حذف</button>
+                                `}
+                            </div>
+                        `;
+                    }).join('')}
+                    ${app.notifications.length > 0 ? '<button class="btn btn-danger" onclick="clearAllNotifications()">پاک کردن همه</button>' : ''}
+                </div>
+            `;
+        }
+
+        function approvePlayerFromNotif(playerId, notifIdx) {
+            const player = app.pendingPlayers.find(p => p.id === playerId);
+            if (!player) return;
+            
+            app.players.push(player);
+            app.pendingPlayers = app.pendingPlayers.filter(p => p.id !== playerId);
+            
+            // Update notification text
+            app.notifications[notifIdx].text = `✅ بازیکن ${player.name} برای تیم ${player.team} تایید شد`;
+            
+            saveData();
+            showTab('notifications');
+            alert('بازیکن تایید شد!');
+        }
+
+        function rejectPlayerFromNotif(playerId, notifIdx) {
+            const player = app.pendingPlayers.find(p => p.id === playerId);
+            if (!player) return;
+            
+            app.pendingPlayers = app.pendingPlayers.filter(p => p.id !== playerId);
+            
+            // Update notification text
+            app.notifications[notifIdx].text = `❌ درخواست بازیکن ${player.name} برای تیم ${player.team} رد شد`;
+            
+            saveData();
+            showTab('notifications');
+            alert('درخواست رد شد!');
+        }
+
+        function deleteNotification(idx) {
+            app.notifications.splice(idx, 1);
+            saveData();
+            showTab('notifications');
+        }
+
+        function clearAllNotifications() {
+            if (!confirm('آیا از پاک کردن تمام اعلان‌ها مطمئن هستید؟')) return;
+            
+            app.notifications = [];
+            saveData();
+            showTab('notifications');
+        }
+
+        function renderScheduleManager(c) {
+            const leagueType = app.leagueType || 'league';
+            const leagueTeams = app.teams.filter(t => t.name !== 'آزاد و جهانی');
+            
+            c.innerHTML = `
+                <div class="card">
+                    <h2 class="card-title">📅 مدیریت برنامه هفته‌ها</h2>
+                    
+                    <div class="settings-section">
+                        <div class="settings-title">نوع رقابت</div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>نوع جدول / رقابت</label>
+                                <select id="leagueTypeSelect" onchange="updateLeagueType()">
+                                    <option value="league" ${leagueType === 'league' ? 'selected' : ''}>لیگ و جام حذفی و سوپرکاپ</option>
+                                    <option value="cup" ${leagueType === 'cup' ? 'selected' : ''}>جام حذفی و گروهی</option>
+                                </select>
+                            </div>
+                        </div>
+                        <p style="color:#b0b0b0;font-size:0.9em;">نوع رقابت انتخاب‌شده: <strong style="color:#1eff00;">${leagueType === 'league' ? 'لیگ و جام حذفی و سوپرکاپ' : 'جام حذفی و گروهی'}</strong></p>
+                    </div>
+                    
+                    <div class="settings-section">
+                        <div class="settings-title">🎯 مدیریت جام حذفی و گروهی</div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>تعداد گروه‌ها</label>
+                                <input type="number" id="groupsCount" min="1" max="16" value="2">
+                            </div>
+                            <div class="form-group">
+                                <label>تعداد تیم‌های صعودکننده از هر گروه</label>
+                                <input type="number" id="advancePerGroup" min="1" max="8" value="2">
+                            </div>
+                        </div>
+                        <p style="color:#b0b0b0;font-size:0.9em;">برای قرعه‌کشی گروهی دکمه زیر را بزنید. بعد از قرعه‌کشی می‌توانید با زدن دکمه "صعود ۲ تیم اول" تیم‌های صعودکننده را مشخص کنید.</p>
+                        <div style="display:flex;gap:10px;margin-top:10px;"><button class="btn" onclick="runGroupDraw()">قرعه‌کشی گروهی</button><button class="btn" onclick="advanceFromGroups()">صعود ۲ تیم اول</button></div>
+                        <div id="groupsArea" style="margin-top:15px;color:#b0b0b0;"></div>
+                    </div>
+    
+                    
+                    <div class="settings-section">
+                        <div class="settings-title">ساخت خودکار هفته‌ها</div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>نوع برنامه</label>
+                                <select id="scheduleType">
+                                    <option value="home_away">رفت و برگشت (دو دور)</option>
+                                    <option value="home_only">فقط رفت (یک دور)</option>
+                                </select>
+                            </div>
+                        </div>
+                        <button class="btn" onclick="generateSchedule()">🔄 ساخت خودکار برنامه</button>
+                        ${app.schedule && app.schedule.length > 0 ? `<button class="btn btn-danger" style="margin-right:10px;" onclick="clearSchedule()">🗑️ پاک کردن برنامه</button>` : ''}
+                    </div>
+                    
+                    ${app.schedule && app.schedule.length > 0 ? `
+                        <div class="settings-section">
+                            <div class="settings-title">برنامه مسابقات (${app.schedule.length} هفته)</div>
+                            ${app.schedule.map((week, wi) => `
+                                <div style="margin-bottom:20px;">
+                                    <div style="color:#1eff00;font-weight:700;margin-bottom:10px;font-size:1.1em;">هفته ${wi + 1}</div>
+                                    ${week.matches.map((m, mi) => {
+                                        const played = app.matches.find(x => x.home === m.home && x.away === m.away);
+                                        return `
+                                        <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 15px;background:rgba(255,255,255,0.05);border-radius:10px;margin-bottom:8px;gap:10px;">
+                                            <span style="font-weight:600;min-width:80px;text-align:right;">${m.home}</span>
+                                            ${played ? `
+                                                <span style="color:#1eff00;padding:5px 15px;background:rgba(30,255,0,0.1);border-radius:8px;font-weight:700;">${played.homeScore} - ${played.awayScore}</span>
+                                            ` : `
+                                                <button class="btn btn-secondary" style="padding:6px 14px;font-size:0.85em;" onclick="openScheduleResult(${wi}, ${mi})">ثبت نتیجه</button>
+                                            `}
+                                            <span style="font-weight:600;min-width:80px;text-align:left;">${m.away}</span>
+                                        </div>
+                                        `;
+                                    }).join('')}
+                                </div>
+                            `).join('')}
+                        </div>
+                    ` : '<p style="color:#b0b0b0;margin-top:15px;">برنامه‌ای ساخته نشده. روی "ساخت خودکار برنامه" کلیک کنید.</p>'}
+
+                    <div class="modal" id="scheduleResultModal">
+                        <div class="modal-content">
+                            <div class="modal-header">ثبت نتیجه مسابقه</div>
+                            <div id="scheduleResultBody"></div>
+                            <button class="modal-close" onclick="closeScheduleResultModal()">بستن</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function updateLeagueType() {
+            app.leagueType = document.getElementById('leagueTypeSelect').value;
+            saveData();
+            renderScheduleManager(document.getElementById('content'));
+        }
+
+        function generateSchedule() {
+            const leagueTeams = app.teams.filter(t => t.name !== 'آزاد و جهانی');
+            if (leagueTeams.length < 2) {
+                alert('حداقل ۲ تیم برای ساخت برنامه نیاز است');
+                return;
+            }
+            
+            const scheduleType = document.getElementById('scheduleType').value;
+            const teams = leagueTeams.map(t => t.name);
+            const schedule = [];
+            
+            // الگوریتم Round Robin
+            const n = teams.length % 2 === 0 ? teams.length : teams.length + 1;
+            const rounds = n - 1;
+            const teamsArr = [...teams];
+            if (teams.length % 2 !== 0) teamsArr.push('BYE');
+            
+            for (let r = 0; r < rounds; r++) {
+                const weekMatches = [];
+                for (let i = 0; i < n / 2; i++) {
+                    const home = teamsArr[i];
+                    const away = teamsArr[n - 1 - i];
+                    if (home !== 'BYE' && away !== 'BYE') {
+                        weekMatches.push({ home, away });
+                    }
+                }
+                schedule.push({ matches: weekMatches });
+                
+                // چرخاندن تیم‌ها (ثابت نگه داشتن اول)
+                const last = teamsArr.pop();
+                teamsArr.splice(1, 0, last);
+            }
+            
+            // اگه رفت و برگشت باشه، دور برگشت اضافه کن
+            if (scheduleType === 'home_away') {
+                const returnSchedule = schedule.map(week => ({
+                    matches: week.matches.map(m => ({ home: m.away, away: m.home }))
+                }));
+                app.schedule = [...schedule, ...returnSchedule];
+            } else {
+                app.schedule = schedule;
+            }
+            
+            saveData();
+            renderScheduleManager(document.getElementById('content'));
+            alert(`✅ برنامه ${app.schedule.length} هفته‌ای ساخته شد!`);
+        }
+
+        function clearSchedule() {
+            if (!confirm('آیا از پاک کردن برنامه مطمئن هستید؟')) return;
+            app.schedule = [];
+            saveData();
+            renderScheduleManager(document.getElementById('content'));
+        }
+
+        function openScheduleResult(wi, mi) {
+            const m = app.schedule[wi].matches[mi];
+            document.getElementById('scheduleResultBody').innerHTML = `
+                <p style="margin-bottom:15px;color:#b0b0b0;">${m.home} در مقابل ${m.away}</p>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>گل ${m.home}</label>
+                        <input type="number" id="sr_homeScore" min="0" value="0">
+                    </div>
+                    <div class="form-group">
+                        <label>گل ${m.away}</label>
+                        <input type="number" id="sr_awayScore" min="0" value="0">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>گلزنان ${m.home}</label>
+                    <input type="text" id="sr_homeScorers" placeholder="مثال: علی، رضا">
+                </div>
+                <div class="form-group">
+                    <label>گلزنان ${m.away}</label>
+                    <input type="text" id="sr_awayScorers" placeholder="مثال: حسن، مهدی">
+                </div>
+                <button class="btn" onclick="submitScheduleResult('${m.home}', '${m.away}')">✅ ثبت نتیجه</button>
+            `;
+            document.getElementById('scheduleResultModal').classList.add('show');
+        }
+
+        function closeScheduleResultModal() {
+            document.getElementById('scheduleResultModal').classList.remove('show');
+        }
+
+        function submitScheduleResult(home, away) {
+            const homeScore = parseInt(document.getElementById('sr_homeScore').value) || 0;
+            const awayScore = parseInt(document.getElementById('sr_awayScore').value) || 0;
+            const homeScorers = document.getElementById('sr_homeScorers').value.trim();
+            const awayScorers = document.getElementById('sr_awayScorers').value.trim();
+
+            let scorers = '';
+            if (homeScorers) scorers += `${home}: ${homeScorers}`;
+            if (awayScorers) scorers += (scorers ? ' | ' : '') + `${away}: ${awayScorers}`;
+
+            app.matches.push({ home, away, homeScore, awayScore, scorers, goalOddsMultiplier: 2 });
+
+            const homeTeam = app.teams.find(t => t.name === home);
+            const awayTeam = app.teams.find(t => t.name === away);
+            if (homeTeam && awayTeam) {
+                homeTeam.gf += homeScore; homeTeam.ga += awayScore;
+                awayTeam.gf += awayScore; awayTeam.ga += homeScore;
+                if (homeScore > awayScore) { homeTeam.w++; homeTeam.p += 3; awayTeam.l++; }
+                else if (homeScore < awayScore) { awayTeam.w++; awayTeam.p += 3; homeTeam.l++; }
+                else { homeTeam.d++; awayTeam.d++; homeTeam.p++; awayTeam.p++; }
+            }
+
+            processBetsForMatch(app.matches.length - 1);
+            saveData();
+            closeScheduleResultModal();
+            renderScheduleManager(document.getElementById('content'));
+        }
+
+        function renderPendingTransfersManager(c) {
+            const pending = (app.pendingTransfers || []).filter(t => t.status === 'pending');
+            const history = (app.pendingTransfers || []).filter(t => t.status !== 'pending');
+            
+            c.innerHTML = `
+                <div class="card">
+                    <h2 class="card-title">🔄 نقل و انتقالات در انتظار تأیید ${pending.length > 0 ? `<span class="pending-badge">${pending.length}</span>` : ''}</h2>
+                    ${pending.length === 0 ? '<p style="color:#b0b0b0;">نقل و انتقالی در انتظار نیست</p>' : pending.map((tr, idx) => `
+                        <div class="transfer-card" style="border-color:rgba(255,165,0,0.4);">
+                            <div class="transfer-details" style="flex:1;">
+                                <div class="transfer-player">🔄 ${tr.playerName}</div>
+                                <div class="transfer-route">${tr.from} → ${tr.to}</div>
+                                <div class="transfer-price">${(tr.amount||0).toLocaleString()} یورو • ${tr.duration || 1} سال</div>
+                                <div style="color:#888;font-size:0.85em;margin-top:5px;">ارسال توسط: تیم ${tr.requestedBy} • ${tr.time}</div>
+                            </div>
+                            <div style="display:flex;flex-direction:column;gap:10px;">
+                                <button class="btn" onclick="approvePendingTransfer(${tr.id})">✅ تأیید</button>
+                                <button class="btn btn-danger" onclick="rejectPendingTransfer(${tr.id})">❌ رد</button>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+                
+                ${history.length > 0 ? `
+                <div class="card">
+                    <h2 class="card-title">تاریخچه نقل و انتقالات</h2>
+                    ${history.map(tr => `
+                        <div class="transfer-card" style="border-color:${tr.status === 'approved' ? 'rgba(30,255,0,0.3)' : 'rgba(255,50,50,0.3)'};">
+                            <div class="transfer-details">
+                                <div class="transfer-player">${tr.status === 'approved' ? '✅' : '❌'} ${tr.playerName}</div>
+                                <div class="transfer-route">${tr.from} → ${tr.to}</div>
+                                <div style="color:#888;font-size:0.85em;">${tr.status === 'approved' ? 'تأیید شد' : 'رد شد'} • ${tr.time}</div>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+                ` : ''}
+            `;
+        }
+
+        function approvePendingTransfer(id) {
+            if (!app.pendingTransfers) return;
+            const tr = app.pendingTransfers.find(t => t.id === id);
+            if (!tr) return;
+            
+            tr.status = 'approved';
+            
+            // کم کردن بودجه از تیم مقصد
+            if (tr.to !== 'آزاد و جهانی' && tr.amount > 0) {
+                const destBudget = app.budgets.find(b => b.team === tr.to);
+                if (destBudget) destBudget.budget -= tr.amount;
+                if (tr.from !== 'آزاد و جهانی') {
+                    const srcBudget = app.budgets.find(b => b.team === tr.from);
+                    if (srcBudget) srcBudget.budget += tr.amount;
+                }
+            }
+            
+            // انتقال واقعی بازیکن
+            const player = app.players.find(p => p.id === tr.playerId);
+            if (player) player.team = tr.to;
+            
+            // اضافه به لیست رسمی
+            app.transfers.push({ player: tr.playerName, playerId: tr.playerId, from: tr.from, to: tr.to, amount: tr.amount, duration: tr.duration || 1, img: tr.img || '' });
+            
+            app.notifications.push({
+                id: Date.now(),
+                text: `✅ انتقال تأیید شد: ${tr.playerName} از ${tr.from} به ${tr.to}`,
+                time: new Date().toLocaleString('fa-IR')
+            });
+            
+            saveData();
+            renderAdmin(document.getElementById('app'));
+            showTab('pendingtransfers');
+        }
+
+        function rejectPendingTransfer(id) {
+            if (!app.pendingTransfers) return;
+            const tr = app.pendingTransfers.find(t => t.id === id);
+            if (!tr) return;
+            
+            tr.status = 'rejected';
+            
+            app.notifications.push({
+                id: Date.now(),
+                text: `❌ انتقال رد شد: ${tr.playerName} از ${tr.from} به ${tr.to}`,
+                time: new Date().toLocaleString('fa-IR')
+            });
+            
+            saveData();
+            renderAdmin(document.getElementById('app'));
+            showTab('pendingtransfers');
+        }
+
+        function renderSettings(c) {
+            c.innerHTML = `
+                <div class="card">
+                    <h2 class="card-title">تنظیمات ظاهری</h2>
+                    
+                    <div class="settings-section">
+                        <div class="settings-title">🏆 اطلاعات لیگ</div>
+                        <div class="form-group">
+                            <label>نام لیگ</label>
+                            <input type="text" id="leagueName" value="${app.settings.leagueName || 'لیگ فوتبال'}" placeholder="نام لیگ را وارد کنید">
+                        </div>
+                        <button class="btn" onclick="saveLeagueName()">ذخیره نام</button>
+                    </div>
+                    
+                    <div class="settings-section">
+                        <div class="settings-title">🖼️ لوگوی لیگ</div>
+                        <div class="form-group">
+                            <label>آدرس تصویر لوگو (URL)</label>
+                            <input type="url" id="logoImg" value="${app.settings.logoImage || ''}" placeholder="https://example.com/logo.png">
+                        </div>
+                        ${app.settings.logoImage ? `<img src="${app.settings.logoImage}" style="width:80px;height:80px;object-fit:contain;border-radius:50%;margin:10px 0;display:block;">` : ''}
+                        <button class="btn" onclick="applyLogo()">ذخیره لوگو</button>
+                        ${app.settings.logoImage ? `<button class="btn btn-danger" style="margin-right:10px;" onclick="removeLogo()">حذف لوگو</button>` : ''}
+                    </div>
+                    
+                    <div class="settings-section">
+                        <div class="settings-title">رنگ دکمه‌ها</div>
+                        <div class="color-picker-group">
+                            <div class="form-group">
+                                <label>رنگ اصلی دکمه</label>
+                                <input type="color" id="btnColor1" value="${app.settings.buttonColor}">
+                            </div>
+                            <div class="form-group">
+                                <label>رنگ ثانویه دکمه</label>
+                                <input type="color" id="btnColor2" value="${app.settings.buttonSecondColor}">
+                            </div>
+                        </div>
+                        <button class="btn" onclick="applyButtonColors()">اعمال رنگ‌ها</button>
+                    </div>
+                    
+                    <div class="settings-section">
+                        <div class="settings-title">🎨 پس‌زمینه</div>
+                        <div class="form-group">
+                            <label>آدرس تصویر پس‌زمینه (URL)</label>
+                            <input type="url" id="bgImg" value="${app.settings.bgImage || ''}" placeholder="https://example.com/background.jpg">
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group"><label>رنگ 1 (اگه عکس نباشه)</label><input type="color" id="bgColor1" value="${app.settings.bgColor1 || '#0a0e27'}"></div>
+                            <div class="form-group"><label>رنگ 2 (اگه عکس نباشه)</label><input type="color" id="bgColor2" value="${app.settings.bgColor2 || '#2a1f3a'}"></div>
+                        </div>
+                        <button class="btn" onclick="applyBg()">اعمال پس‌زمینه</button>
+                        ${app.settings.bgImage ? `<button class="btn btn-danger" style="margin-right:10px;" onclick="removeBg()">حذف پس‌زمینه</button>` : ''}
+                    </div>
+                </div>
+            `;
+        }
+
+        function saveLeagueName() {
+            app.settings.leagueName = document.getElementById('leagueName').value.trim() || 'لیگ فوتبال';
+            saveData();
+            alert('نام لیگ ذخیره شد');
+        }
+
+        function applyLogo() {
+            const logoUrl = document.getElementById('logoImg').value.trim();
+            app.settings.logoImage = logoUrl;
+            saveData();
+            renderSettings(document.getElementById('content'));
+            alert('لوگو ذخیره شد');
+        }
+
+        function removeLogo() {
+            app.settings.logoImage = '';
+            saveData();
+            renderSettings(document.getElementById('content'));
+        }
+
+        function removeBg() {
+            app.settings.bgImage = '';
+            document.body.style.background = `linear-gradient(135deg, ${app.settings.bgColor1 || '#0a0e27'} 0%, ${app.settings.bgColor2 || '#2a1f3a'} 100%)`;
+            saveData();
+            renderSettings(document.getElementById('content'));
+        }
+
+        function applyButtonColors() {
+            const color1 = document.getElementById('btnColor1').value;
+            const color2 = document.getElementById('btnColor2').value;
+            
+            app.settings.buttonColor = color1;
+            app.settings.buttonSecondColor = color2;
+            
+            const style = document.createElement('style');
+            style.innerHTML = `
+                .btn { background: linear-gradient(135deg, ${color1} 0%, ${color2} 100%) !important; }
+                .nav-tab.active { background: linear-gradient(135deg, ${color1} 0%, ${color2} 100%) !important; }
+                .role-btn.active { background: linear-gradient(135deg, ${color1} 0%, ${color2} 100%) !important; }
+                .login-btn { background: linear-gradient(135deg, ${color1} 0%, ${color2} 100%) !important; }
+            `;
+            document.head.appendChild(style);
+            
+            saveData();
+            alert('رنگ دکمه‌ها تغییر کرد');
+        }
+
+        function applyBg() {
+            const img = document.getElementById('bgImg').value.trim();
+            const c1 = document.getElementById('bgColor1').value;
+            const c2 = document.getElementById('bgColor2').value;
+            
+            app.settings.bgImage = img;
+            app.settings.bgColor1 = c1;
+            app.settings.bgColor2 = c2;
+            
+            if (img) {
+                document.body.style.backgroundImage = `url('${img}')`;
+                document.body.style.backgroundSize = 'cover';
+                document.body.style.backgroundAttachment = 'fixed';
+                document.body.style.backgroundPosition = 'center';
+            } else {
+                document.body.style.backgroundImage = '';
+                document.body.style.background = `linear-gradient(135deg, ${c1} 0%, ${c2} 100%)`;
+            }
+            
+            saveData();
+            renderSettings(document.getElementById('content'));
+            alert('پس‌زمینه تغییر کرد');
+        }
+
+        function renderStandings(c) {
+            // تیم آزاد و جهانی در جدول نیست
+            const allTeams = [...app.teams].filter(t => t.name !== 'آزاد و جهانی');
+            
+            // اگر گروه‌ها وجود دارند، جدول گروهی نشان بده
+            if (app.groups && Object.keys(app.groups).length > 0) {
+                let groupsHtml = '';
+                Object.keys(app.groups).forEach(groupName => {
+                    const groupTeamNames = app.groups[groupName];
+                    const groupTeams = groupTeamNames.map(name => {
+                        return allTeams.find(t => t.name === name) || { name, w:0, d:0, l:0, gf:0, ga:0, p:0 };
+                    }).sort((a, b) => {
+                        if (b.p !== a.p) return b.p - a.p;
+                        const diffA = a.gf - a.ga;
+                        const diffB = b.gf - b.ga;
+                        if (diffB !== diffA) return diffB - diffA;
+                        return b.gf - a.gf;
+                    });
+                    
+                    groupsHtml += `
+                        <div class="card" style="margin-bottom: 20px;">
+                            <h3 style="color:#1eff00; margin-bottom:15px;">${groupName}</h3>
+                            <div class="table-wrapper">
+                                <table class="data-table">
+                                    <thead><tr><th>رتبه</th><th>تیم</th><th>بازی</th><th>برد</th><th>مساوی</th><th>باخت</th><th>گل زده</th><th>گل خورده</th><th>تفاضل</th><th>امتیاز</th></tr></thead>
+                                    <tbody>${groupTeams.map((t, i) => `
+                                        <tr>
+                                            <td>${i + 1}</td>
+                                            <td style="text-align:right;font-weight:600;">${t.name}</td>
+                                            <td>${t.w + t.d + t.l}</td>
+                                            <td>${t.w}</td>
+                                            <td>${t.d}</td>
+                                            <td>${t.l}</td>
+                                            <td>${t.gf}</td>
+                                            <td>${t.ga}</td>
+                                            <td style="color:${t.gf - t.ga > 0 ? '#1eff00' : t.gf - t.ga < 0 ? '#ff5050' : '#fff'}">${t.gf - t.ga > 0 ? '+' : ''}${t.gf - t.ga}</td>
+                                            <td style="font-weight:700;color:#1eff00;">${t.p}</td>
+                                        </tr>
+                                    `).join('')}</tbody>
+                                </table>
+                            </div>
+                        </div>
+                    `;
+                });
+                
+                c.innerHTML = `
+                    <div class="card">
+                        <h2 class="card-title">جدول رده‌بندی گروهی</h2>
+                    </div>
+                    ${groupsHtml}
+                `;
+            } else {
+                // جدول عادی
+                const sorted = allTeams.sort((a, b) => {
+                    if (b.p !== a.p) return b.p - a.p;
+                    const diffA = a.gf - a.ga;
+                    const diffB = b.gf - b.ga;
+                    if (diffB !== diffA) return diffB - diffA;
+                    return b.gf - a.gf;
+                });
+                
+                c.innerHTML = `
+                    <div class="card">
+                        <h2 class="card-title">جدول رده‌بندی</h2>
+                        ${sorted.length === 0 ? '<p style="color:#b0b0b0;">تیمی وجود ندارد</p>' : `
+                            <div class="table-wrapper">
+                                <table class="data-table">
+                                    <thead><tr><th>رتبه</th><th>تیم</th><th>بازی</th><th>برد</th><th>مساوی</th><th>باخت</th><th>گل زده</th><th>گل خورده</th><th>تفاضل</th><th>امتیاز</th></tr></thead>
+                                    <tbody>${sorted.map((t, i) => `
+                                        <tr>
+                                            <td>${i + 1}</td>
+                                            <td style="text-align:right;font-weight:600;">${t.name}</td>
+                                        <td>${t.w + t.d + t.l}</td>
+                                        <td>${t.w}</td>
+                                        <td>${t.d}</td>
+                                        <td>${t.l}</td>
+                                        <td>${t.gf}</td>
+                                        <td>${t.ga}</td>
+                                        <td style="color:${t.gf - t.ga > 0 ? '#1eff00' : t.gf - t.ga < 0 ? '#ff5050' : '#fff'}">${t.gf - t.ga > 0 ? '+' : ''}${t.gf - t.ga}</td>
+                                        <td style="font-weight:700;color:#1eff00;">${t.p}</td>
+                                    </tr>
+                                `).join('')}</tbody>
+                            </table>
+                            </div>
+                        `}
+                    </div>
+                `;
+            }
+        }
+
+        function renderMatchesView(c) {
+            // محاسبه بازی‌های هفته
+            const currentWeek = Math.floor(app.matches.length / (app.teams.length / 2)) + 1;
+            const weekMatches = app.matches.filter((m, idx) => {
+                const matchWeek = Math.floor(idx / (app.teams.length / 2)) + 1;
+                return matchWeek === currentWeek;
+            });
+            
+            c.innerHTML = `
+                <div class="card">
+                    <h2 class="card-title">مسابقات</h2>
+                    
+                    ${weekMatches.length > 0 ? `
+                        <div style="margin-bottom: 30px;">
+                            <h3 style="color:#1eff00; margin-bottom:15px;">🏆 بازی‌های هفته ${currentWeek}</h3>
+                            ${weekMatches.map(m => `
+                                <div class="match-card">
+                                    <div class="match-teams">
+                                        <span class="team-name">${m.home}</span>
+                                        <span class="match-score">${m.homeScore} - ${m.awayScore}</span>
+                                        <span class="team-name">${m.away}</span>
+                                    </div>
+                                    ${m.scorers ? `<div style="color:#b0b0b0;margin-top:10px;">گلزنان: ${m.scorers}</div>` : ''}
+                                </div>
+                            `).join('')}
+                        </div>
+                    ` : ''}
+                    
+                    <h3 style="color:#fff; margin-bottom:15px;">تمام مسابقات</h3>
+                    ${app.matches.length === 0 ? '<p style="color:#b0b0b0;">مسابقه‌ای وجود ندارد</p>' : app.matches.map(m => `
+                        <div class="match-card">
+                            <div class="match-teams">
+                                <span class="team-name">${m.home}</span>
+                                <span class="match-score">${m.homeScore} - ${m.awayScore}</span>
+                                <span class="team-name">${m.away}</span>
+                            </div>
+                            ${m.scorers ? `<div style="color:#b0b0b0;margin-top:10px;">گلزنان: ${m.scorers}</div>` : ''}
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        }
+
+        function renderBudgetView(c) {
+            c.innerHTML = `
+                <div class="card">
+                    <h2 class="card-title">بودجه تیم‌ها</h2>
+                    ${app.budgets.length === 0 ? '<p style="color:#b0b0b0;">بودجه‌ای وجود ندارد</p>' : `
+                        <table class="data-table">
+                            <thead><tr><th>تیم</th><th>بودجه (یورو)</th></tr></thead>
+                            <tbody>${app.budgets.map(b => `<tr><td>${b.team}</td><td>${b.budget.toLocaleString()}</td></tr>`).join('')}</tbody>
+                        </table>
+                    `}
+                </div>
+            `;
+        }
+
+        function renderTransfersView(c) {
+            c.innerHTML = `
+                <div class="card">
+                    <h2 class="card-title">نقل و انتقالات</h2>
+                    ${app.transfers.length === 0 ? '<p style="color:#b0b0b0;">نقل و انتقالی وجود ندارد</p>' : app.transfers.map(tr => `
+                        <div class="transfer-card">
+                            ${tr.img ? `<img src="${tr.img}" class="transfer-image" alt="${tr.player}">` : ''}
+                            <div class="transfer-details">
+                                <div class="transfer-player">${tr.player}</div>
+                                <div class="transfer-route">${tr.from} → ${tr.to}</div>
+                                <div class="transfer-price">${tr.amount.toLocaleString()} یورو • ${tr.duration} سال</div>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        }
+
+        function renderMyTeam(c) {
+            const teamData = Object.values(app.userTeams).find(t => t.name === app.team);
+            const teamPlayers = app.players.filter(p => p.team === app.team);
+            const teamMatches = app.matches.filter(m => m.home === app.team || m.away === app.team).slice(-5);
+            const teamBudget = app.budgets.find(b => b.team === app.team);
+            // بازیکنان آزاد در تیم آزاد و جهانی
+            const freePlayers = app.players.filter(p => p.team === 'آزاد و جهانی');
+            // بازیکنان سایر تیم‌ها
+            const otherPlayers = app.players.filter(p => p.team !== app.team && p.team !== 'آزاد و جهانی');
+            const allTransferPlayers = [...freePlayers, ...otherPlayers];
+            
+            c.innerHTML = `
+                <div class="card">
+                    <h2 class="card-title">تیم من: ${app.team}</h2>
+                    <div class="stats-grid">
+                        <div class="stat-box"><div class="stat-value">${teamPlayers.length}</div><div class="stat-label">بازیکنان</div></div>
+                        <div class="stat-box"><div class="stat-value">${teamMatches.length}</div><div class="stat-label">مسابقات اخیر</div></div>
+                        <div class="stat-box"><div class="stat-value">${teamBudget ? teamBudget.budget.toLocaleString() : '0'}</div><div class="stat-label">بودجه (یورو)</div></div>
+                    </div>
+                </div>
+                
+                <div class="card">
+                    <h2 class="card-title">افزودن بازیکن جدید</h2>
+                    <div class="form-row">
+                        <div class="form-group"><label>نام بازیکن</label><input type="text" id="newPlayerName"></div>
+                        <div class="form-group"><label>پست</label><select id="newPlayerPos"><option>GK</option><option>DF</option><option>MF</option><option>FW</option></select></div>
+                        <div class="form-group"><label>Overall</label><input type="number" id="newPlayerOverall" min="1" max="99" value="75"></div>
+                    </div>
+                    <button class="btn" onclick="requestAddPlayer()">درخواست افزودن</button>
+                </div>
+                
+                <div class="card" style="border-color:rgba(255,165,0,0.3);">
+                    <h2 class="card-title" style="color:#ffa500;">🔄 درخواست نقل و انتقال (غیررسمی)</h2>
+                    <p style="color:#b0b0b0;margin-bottom:15px;">درخواست شما به ادمین ارسال می‌شود و فقط پس از تأیید رسمی می‌شود.</p>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>بازیکن مورد نظر</label>
+                            <select id="reqTransferPlayer">
+                                <option value="">-- انتخاب بازیکن --</option>
+                                ${allTransferPlayers.map(p => `<option value="${p.id}" data-name="${p.name}" data-team="${p.team}">${p.name} (${p.team})</option>`).join('')}
+                            </select>
+                        </div>
+                        <div class="form-group"><label>مبلغ پیشنهادی (یورو)</label><input type="number" id="reqTransferAmount" min="0" value="0"></div>
+                        <div class="form-group"><label>مدت قرارداد (سال)</label><input type="number" id="reqTransferDuration" min="1" max="10" value="3"></div>
+                    </div>
+                    <button class="btn" onclick="requestTransfer()">📤 ارسال درخواست به ادمین</button>
+                    
+                    ${(app.pendingTransfers || []).filter(t => t.requestedBy === app.team).length > 0 ? `
+                        <div style="margin-top:20px;">
+                            <strong style="color:#1eff00;">درخواست‌های من:</strong>
+                            ${(app.pendingTransfers || []).filter(t => t.requestedBy === app.team).map(t => `
+                                <div style="padding:10px;background:rgba(255,255,255,0.05);border-radius:10px;margin-top:10px;">
+                                    <span>${t.playerName}</span> 
+                                    <span style="color:#888;margin:0 10px;">→</span>
+                                    <span style="color:#1eff00;">${app.team}</span>
+                                    <span class="pending-badge" style="margin-right:10px;">${t.status === 'pending' ? 'در انتظار' : t.status === 'approved' ? '✅ تأیید' : '❌ رد'}</span>
+                                </div>
+                            `).join('')}
+                        </div>
+                    ` : ''}
+                </div>
+                
+                <div class="card">
+                    <h2 class="card-title">بازیکنان تیم</h2>
+                    ${teamPlayers.length === 0 ? '<p style="color:#b0b0b0;">بازیکنی وجود ندارد</p>' : teamPlayers.map(p => `
+                        <div class="player-card">
+                            <div class="player-info">
+                                <div class="player-name">${p.name}</div>
+                                <div class="player-details">${p.position} • Overall: ${p.overall}</div>
+                            </div>
+                            <div class="player-overall">${p.overall}</div>
+                        </div>
+                    `).join('')}
+                </div>
+                
+                <div class="card">
+                    <h2 class="card-title">تغییر تاکتیک</h2>
+                    <div class="form-group"><label>چینش</label><select id="formation"><option>4-3-3</option><option>4-4-2</option><option>3-5-2</option><option>4-2-3-1</option></select></div>
+                    <div class="form-group"><label>شیوه بازی</label><select id="tactics"><option>تهاجمی</option><option>متعادل</option><option>دفاعی</option></select></div>
+                    <div class="form-group"><label>پیام تاکتیک</label><textarea id="tacticMsg" rows="4" placeholder="تغییرات تاکتیکی خود را شرح دهید"></textarea></div>
+                    <button class="btn" onclick="submitTactics()">ارسال به ادمین</button>
+                </div>
+            `;
+        }
+
+        function requestAddPlayer() {
+            const name = document.getElementById('newPlayerName').value.trim();
+            const position = document.getElementById('newPlayerPos').value;
+            const overall = parseInt(document.getElementById('newPlayerOverall').value);
+            
+            if (!name) {
+                alert('لطفا نام بازیکن را وارد کنید');
+                return;
+            }
+            
+            app.pendingPlayers.push({
+                id: Date.now(),
+                name,
+                team: app.team,
+                position,
+                overall
+            });
+            
+            app.notifications.push({
+                id: Date.now(),
+                text: `درخواست افزودن بازیکن ${name} از تیم ${app.team}`,
+                time: new Date().toLocaleString('fa-IR')
+            });
+            
+            saveData();
+            alert('درخواست شما برای ادمین ارسال شد');
+            showTeamTab('myteam');
+        }
+
+        function requestTransfer() {
+            const playerSelect = document.getElementById('reqTransferPlayer');
+            const playerId = parseInt(playerSelect.value);
+            const playerName = playerSelect.options[playerSelect.selectedIndex].getAttribute('data-name');
+            const playerFromTeam = playerSelect.options[playerSelect.selectedIndex].getAttribute('data-team');
+            const amount = parseInt(document.getElementById('reqTransferAmount').value) || 0;
+            const duration = parseInt(document.getElementById('reqTransferDuration').value) || 1;
+            
+            if (!playerId || !playerName) {
+                alert('لطفا بازیکن مورد نظر را انتخاب کنید');
+                return;
+            }
+            
+            if (!app.pendingTransfers) app.pendingTransfers = [];
+            
+            app.pendingTransfers.push({
+                id: Date.now(),
+                playerId,
+                playerName,
+                from: playerFromTeam,
+                to: app.team,
+                amount,
+                duration,
+                requestedBy: app.team,
+                status: 'pending',
+                time: new Date().toLocaleString('fa-IR')
+            });
+            
+            app.notifications.push({
+                id: Date.now(),
+                text: `🔄 درخواست نقل و انتقال: تیم ${app.team} خواستار جذب ${playerName} (از ${playerFromTeam}) به مبلغ ${amount.toLocaleString()} یورو`,
+                time: new Date().toLocaleString('fa-IR')
+            });
+            
+            saveData();
+            alert('درخواست نقل و انتقال به ادمین ارسال شد. منتظر تأیید باشید.');
+            showTeamTab('myteam');
+        }
+
+        function submitTactics() {
+            const formation = document.getElementById('formation').value;
+            const tactics = document.getElementById('tactics').value;
+            const msg = document.getElementById('tacticMsg').value.trim();
+            
+            app.notifications.push({
+                id: Date.now(),
+                text: `تغییر تاکتیک ${app.team}: ${formation} - ${tactics}${msg ? ' - ' + msg : ''}`,
+                time: new Date().toLocaleString('fa-IR')
+            });
+            
+            saveData();
+            alert('تغییرات به ادمین ارسال شد');
+        }
+
+        function renderAIAssistant(c) {
+            const messages = app.chatHistory || [];
+            
+            c.innerHTML = `
+                <div class="card">
+                    <h2 class="card-title">🤖 دستیار هوشمند لیگ</h2>
+                    <p style="color:#b0b0b0;margin-bottom:20px;">سوالات خود درباره لیگ، تیم‌ها، بازیکنان و تاکتیک‌ها را بپرسید</p>
+                    
+                    <div class="chat-container">
+                        <div class="chat-messages" id="chatMessages">
+                            ${messages.map(m => `
+                                <div class="chat-message ${m.role}">
+                                    <strong>${m.role === 'user' ? 'شما' : 'دستیار هوشمند'}:</strong>
+                                    <p style="margin-top:8px;">${m.text}</p>
+                                </div>
+                            `).join('')}
+                        </div>
+                        
+                        <div class="chat-input-area">
+                            <input type="text" id="chatInput" class="chat-input" placeholder="سوال خود را بپرسید..." onkeypress="if(event.key==='Enter') sendMessage()">
+                            <button class="btn" onclick="sendMessage()">ارسال</button>
+                        </div>
+                    </div>
+                    
+                    <div style="margin-top:20px;padding:20px;background:rgba(30,255,0,0.05);border-radius:15px;border:1px solid rgba(30,255,0,0.2);">
+                        <strong style="color:#1eff00;">سوالات پیشنهادی:</strong>
+                        <div style="margin-top:15px;display:grid;gap:10px;">
+                            <button class="btn btn-secondary" onclick="askPredefined('وضعیت تیم من در جدول چگونه است؟')">وضعیت تیم من در جدول چگونه است؟</button>
+                            <button class="btn btn-secondary" onclick="askPredefined('بهترین بازیکنان تیم من چه کسانی هستند؟')">بهترین بازیکنان تیم من چه کسانی هستند؟</button>
+                            <button class="btn btn-secondary" onclick="askPredefined('چه تاکتیکی برای بازی بعدی پیشنهاد می‌کنی؟')">چه تاکتیکی برای بازی بعدی پیشنهاد می‌کنی؟</button>
+                            <button class="btn btn-secondary" onclick="askPredefined('نقاط ضعف تیم من کجاست؟')">نقاط ضعف تیم من کجاست؟</button>
+                            <button class="btn btn-secondary" onclick="askPredefined('آمار مسابقات اخیر من چطور بوده؟')">آمار مسابقات اخیر من چطور بوده؟</button>
+                            <button class="btn btn-secondary" onclick="askPredefined('کدام پست نیاز به تقویت دارد؟')">کدام پست نیاز به تقویت دارد؟</button>
+                            <button class="btn btn-secondary" onclick="askPredefined('برای صدرنشینی چه باید بکنم؟')">برای صدرنشینی چه باید بکنم؟</button>
+                            <button class="btn btn-secondary" onclick="askPredefined('بودجه من چقدر است؟')">بودجه من چقدر است؟</button>
+                            <button class="btn btn-secondary" onclick="askPredefined('مقایسه تیم من با حریفان')">مقایسه تیم من با حریفان</button>
+                            <button class="btn btn-secondary" onclick="askPredefined('تحلیل بازیکن جدید برای خرید')">تحلیل بازیکن جدید برای خرید</button>
+                            <button class="btn btn-secondary" onclick="askPredefined('استراتژی برد در بازی بعدی')">استراتژی برد در بازی بعدی</button>
+                            <button class="btn btn-secondary" onclick="askPredefined('نقاط قوت تیم من')">نقاط قوت تیم من</button>
+                            <button class="btn btn-secondary" onclick="askPredefined('پیش‌بینی نتیجه لیگ')">پیش‌بینی نتیجه لیگ</button>
+                            <button class="btn btn-secondary" onclick="askPredefined('راهنمای مدیریت تیم')">راهنمای مدیریت تیم</button>
+                            <button class="btn btn-secondary" onclick="askPredefined('تحلیل عملکرد فصل')">تحلیل عملکرد فصل</button>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            scrollChatToBottom();
+        }
+
+        function sendMessage() {
+            const input = document.getElementById('chatInput');
+            const message = input.value.trim();
+            
+            if (!message) return;
+            
+            if (!app.chatHistory) app.chatHistory = [];
+            
+            app.chatHistory.push({ role: 'user', text: message });
+            input.value = '';
+            
+            const response = generateAIResponse(message);
+            app.chatHistory.push({ role: 'ai', text: response });
+            
+            saveData();
+            renderAIAssistant(document.getElementById('content'));
+        }
+
+        function askPredefined(question) {
+            document.getElementById('chatInput').value = question;
+            sendMessage();
+        }
+
+        function generateAIResponse(message) {
+            const msg = message.toLowerCase();
+            const myTeam = app.teams.find(t => t.name === app.team);
+            const myPlayers = app.players.filter(p => p.team === app.team);
+            const myMatches = app.matches.filter(m => m.home === app.team || m.away === app.team);
+            const myBudget = app.budgets.find(b => b.team === app.team);
+            
+            const sorted = [...app.teams].sort((a, b) => b.p - a.p);
+            const myRank = sorted.findIndex(t => t.name === app.team) + 1;
+            
+            if (msg.includes('جدول') || msg.includes('وضعیت') || msg.includes('رتبه')) {
+                return `تیم ${app.team} در رتبه ${myRank} جدول قرار دارد با ${myTeam.p} امتیاز. شما ${myTeam.w} برد، ${myTeam.d} مساوی و ${myTeam.l} باخت داشته‌اید. تفاضل گل شما ${myTeam.gf - myTeam.ga} است.`;
+            }
+            
+            if (msg.includes('بهترین بازیکن') || msg.includes('بازیکنان برتر')) {
+                const topPlayers = myPlayers.sort((a, b) => b.overall - a.overall).slice(0, 3);
+                return `بهترین بازیکنان شما: ${topPlayers.map(p => `${p.name} (${p.overall})`).join('، ')}. این بازیکنان ستون اصلی تیم شما هستند.`;
+            }
+            
+            if (msg.includes('تاکتیک') || msg.includes('استراتژی')) {
+                return `با توجه به ترکیب تیم شما، پیشنهاد می‌کنم از چینش 4-3-3 تهاجمی استفاده کنید. بازیکنان شما در خط حمله توانایی بالایی دارند. روی فشار بالا و بازی سریع تمرکز کنید.`;
+            }
+            
+            if (msg.includes('نقطه ضعف') || msg.includes('ضعف')) {
+                const positions = { GK: 0, DF: 0, MF: 0, FW: 0 };
+                myPlayers.forEach(p => positions[p.position]++);
+                const weak = Object.entries(positions).sort((a, b) => a[1] - b[1])[0];
+                return `نقطه ضعف اصلی تیم شما کمبود در پست ${weak[0]} است. فقط ${weak[1]} بازیکن در این پست دارید. پیشنهاد می‌کنم در نقل و انتقالات آینده روی این پست تمرکز کنید.`;
+            }
+            
+            if (msg.includes('مسابقات') || msg.includes('آمار')) {
+                const recent = myMatches.slice(-3);
+                const wins = recent.filter(m => 
+                    (m.home === app.team && m.homeScore > m.awayScore) || 
+                    (m.away === app.team && m.awayScore > m.homeScore)
+                ).length;
+                return `در ${recent.length} بازی اخیر، ${wins} برد کسب کرده‌اید. عملکرد شما ${wins > 1 ? 'خوب' : 'نیاز به بهبود دارد'}. در کل ${myMatches.length} مسابقه انجام داده‌اید.`;
+            }
+            
+            if (msg.includes('پست') || msg.includes('تقویت')) {
+                const avgByPos = {};
+                ['GK', 'DF', 'MF', 'FW'].forEach(pos => {
+                    const players = myPlayers.filter(p => p.position === pos);
+                    avgByPos[pos] = players.length > 0 ? 
+                        players.reduce((sum, p) => sum + p.overall, 0) / players.length : 0;
+                });
+                const weakPos = Object.entries(avgByPos).sort((a, b) => a[1] - b[1])[0];
+                return `بر اساس تحلیل، پست ${weakPos[0]} با میانگین ${weakPos[1].toFixed(1)} نیاز به تقویت دارد. پیشنهاد می‌کنم بازیکنی با overall بالاتر از 80 در این پست جذب کنید.`;
+            }
+            
+            if (msg.includes('صدرنشین') || msg.includes('قهرمان')) {
+                const gap = sorted[0].p - myTeam.p;
+                return gap === 0 ? 
+                    'شما در صدر جدول هستید! برای حفظ این موقعیت، روی ثبات و عدم اشتباهات دفاعی تمرکز کنید.' :
+                    `فاصله شما با صدر ${gap} امتیاز است. برای رسیدن به صدر باید در بازی‌های باقیمانده برد کسب کنید و امیدوار باشید صدرنشین امتیاز از دست بدهد.`;
+            }
+            
+            if (msg.includes('بودجه') || msg.includes('پول')) {
+                return `بودجه فعلی تیم شما ${myBudget.budget.toLocaleString()} یورو است. این بودجه را می‌توانید برای جذب بازیکنان جدید یا بهبود امکانات تیم استفاده کنید.`;
+            }
+            
+            if (msg.includes('مقایسه') || msg.includes('حریف')) {
+                const top3 = sorted.slice(0, 3);
+                return `سه تیم برتر لیگ: ${top3.map((t, i) => `${i+1}. ${t.name} (${t.p} امتیاز)`).join('، ')}. ${
+                    myRank <= 3 ? 'شما در بین تیم‌های برتر هستید!' : 
+                    'برای رقابت با آن‌ها باید عملکرد خود را بهبود دهید.'
+                }`;
+            }
+            
+            if (msg.includes('خرید') || msg.includes('نقل و انتقال')) {
+                return `برای خرید بازیکن، ابتدا نقاط ضعف تیم را شناسایی کنید. بازیکنانی با overall بالای 80 را هدف بگیرید. همچنین توجه داشته باشید که بودجه کافی داشته باشید.`;
+            }
+            
+            if (msg.includes('برد') || msg.includes('پیروز')) {
+                return `برای برد در بازی‌های آینده: 1) از بهترین ترکیب استفاده کنید 2) تاکتیک مناسب انتخاب کنید 3) روی نقاط قوت تمرکز کنید 4) از اشتباهات دفاعی بپرهیزید`;
+            }
+            
+            if (msg.includes('نقطه قوت') || msg.includes('قوت')) {
+                const bestPlayers = myPlayers.sort((a, b) => b.overall - a.overall).slice(0, 3);
+                return `نقاط قوت تیم شما: بازیکنان کلیدی قوی (${bestPlayers.map(p => p.name).join('، ')})، تعداد بازیکنان کافی (${myPlayers.length} نفر)`;
+            }
+            
+            if (msg.includes('پیش‌بینی') || msg.includes('آینده')) {
+                return myRank <= 3 ? 
+                    'با ادامه این روند، شانس خوبی برای قهرمانی یا کسب مدال دارید. حفظ ثبات کلید موفقیت است.' :
+                    'برای بهبود رتبه، باید در بازی‌های باقیمانده نتایج بهتری کسب کنید. تمرکز روی جلوگیری از باخت مهم است.';
+            }
+            
+            if (msg.includes('راهنما') || msg.includes('کمک')) {
+                return `راهنمای مدیریت تیم: 1) بازیکنان با کیفیت جذب کنید 2) تاکتیک مناسب انتخاب کنید 3) بودجه را عاقلانه مدیریت کنید 4) عملکرد بازیکنان را زیر نظر بگیرید 5) با ادمین لیگ در ارتباط باشید`;
+            }
+            
+            if (msg.includes('تحلیل') || msg.includes('عملکرد')) {
+                const winRate = ((myTeam.w / (myTeam.w + myTeam.d + myTeam.l)) * 100).toFixed(1);
+                return `تحلیل عملکرد: درصد برد ${winRate}%، تفاضل گل ${myTeam.gf - myTeam.ga}، رتبه ${myRank} از ${app.teams.length}. ${
+                    winRate > 50 ? 'عملکرد خوبی دارید!' : 'نیاز به بهبود دارید.'
+                }`;
+            }
+            
+            return 'سوال جالبی است! می‌توانید سوالات مختلفی درباره تیم، بازیکنان، جدول، تاکتیک و بودجه بپرسید. از دکمه‌های پیشنهادی هم می‌توانید استفاده کنید.';
+        }
+
+        function scrollChatToBottom() {
+            setTimeout(() => {
+                const chatMessages = document.getElementById('chatMessages');
+                if (chatMessages) chatMessages.scrollTop = chatMessages.scrollHeight;
+            }, 100);
+        }
+
+        function renderStats(c) {
+            c.innerHTML = `
+                <div class="card">
+                    <h2 class="card-title">آمار کلی لیگ</h2>
+                    <div class="stats-grid">
+                        <div class="stat-box"><div class="stat-value">${app.teams.length}</div><div class="stat-label">تیم‌ها</div></div>
+                        <div class="stat-box"><div class="stat-value">${app.players.length}</div><div class="stat-label">بازیکنان</div></div>
+                        <div class="stat-box"><div class="stat-value">${app.matches.length}</div><div class="stat-label">مسابقات</div></div>
+                        <div class="stat-box"><div class="stat-value">${app.transfers.length}</div><div class="stat-label">نقل و انتقالات</div></div>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Lineup Editor Functions
+        const formations = {
+            '4-4-2': [
+                { pos: 'GK', x: 50, y: 95 },
+                { pos: 'DF', x: 20, y: 75 },
+                { pos: 'DF', x: 40, y: 75 },
+                { pos: 'DF', x: 60, y: 75 },
+                { pos: 'DF', x: 80, y: 75 },
+                { pos: 'MF', x: 20, y: 50 },
+                { pos: 'MF', x: 40, y: 50 },
+                { pos: 'MF', x: 60, y: 50 },
+                { pos: 'MF', x: 80, y: 50 },
+                { pos: 'FW', x: 35, y: 20 },
+                { pos: 'FW', x: 65, y: 20 }
+            ],
+            '4-3-3': [
+                { pos: 'GK', x: 50, y: 95 },
+                { pos: 'DF', x: 20, y: 75 },
+                { pos: 'DF', x: 40, y: 75 },
+                { pos: 'DF', x: 60, y: 75 },
+                { pos: 'DF', x: 80, y: 75 },
+                { pos: 'MF', x: 30, y: 50 },
+                { pos: 'MF', x: 50, y: 50 },
+                { pos: 'MF', x: 70, y: 50 },
+                { pos: 'FW', x: 20, y: 20 },
+                { pos: 'FW', x: 50, y: 20 },
+                { pos: 'FW', x: 80, y: 20 }
+            ],
+            '3-5-2': [
+                { pos: 'GK', x: 50, y: 95 },
+                { pos: 'DF', x: 30, y: 75 },
+                { pos: 'DF', x: 50, y: 75 },
+                { pos: 'DF', x: 70, y: 75 },
+                { pos: 'MF', x: 15, y: 50 },
+                { pos: 'MF', x: 35, y: 50 },
+                { pos: 'MF', x: 50, y: 50 },
+                { pos: 'MF', x: 65, y: 50 },
+                { pos: 'MF', x: 85, y: 50 },
+                { pos: 'FW', x: 35, y: 20 },
+                { pos: 'FW', x: 65, y: 20 }
+            ],
+            '5-4-1': [
+                { pos: 'GK', x: 50, y: 95 },
+                { pos: 'DF', x: 15, y: 75 },
+                { pos: 'DF', x: 32, y: 75 },
+                { pos: 'DF', x: 50, y: 75 },
+                { pos: 'DF', x: 68, y: 75 },
+                { pos: 'DF', x: 85, y: 75 },
+                { pos: 'MF', x: 25, y: 45 },
+                { pos: 'MF', x: 42, y: 50 },
+                { pos: 'MF', x: 58, y: 50 },
+                { pos: 'MF', x: 75, y: 45 },
+                { pos: 'FW', x: 50, y: 20 }
+            ],
+            '3-4-3': [
+                { pos: 'GK', x: 50, y: 95 },
+                { pos: 'DF', x: 30, y: 75 },
+                { pos: 'DF', x: 50, y: 75 },
+                { pos: 'DF', x: 70, y: 75 },
+                { pos: 'MF', x: 25, y: 50 },
+                { pos: 'MF', x: 45, y: 50 },
+                { pos: 'MF', x: 55, y: 50 },
+                { pos: 'MF', x: 75, y: 50 },
+                { pos: 'FW', x: 20, y: 20 },
+                { pos: 'FW', x: 50, y: 15 },
+                { pos: 'FW', x: 80, y: 20 }
+            ],
+            '4-5-1': [
+                { pos: 'GK', x: 50, y: 95 },
+                { pos: 'DF', x: 20, y: 75 },
+                { pos: 'DF', x: 40, y: 75 },
+                { pos: 'DF', x: 60, y: 75 },
+                { pos: 'DF', x: 80, y: 75 },
+                { pos: 'MF', x: 15, y: 45 },
+                { pos: 'MF', x: 35, y: 50 },
+                { pos: 'MF', x: 50, y: 48 },
+                { pos: 'MF', x: 65, y: 50 },
+                { pos: 'MF', x: 85, y: 45 },
+                { pos: 'FW', x: 50, y: 20 }
+             ],
+            '5-3-2': [
+                { pos: 'GK', x: 50, y: 95 },
+                { pos: 'DF', x: 20, y: 75 },
+                { pos: 'DF', x: 40, y: 75 },
+                { pos: 'DF', x: 60, y: 75 },
+                { pos: 'DF', x: 80, y: 75 },
+                { pos: 'DF', x: 20, y: 50 },
+                { pos: 'MF', x: 40, y: 50 },
+                { pos: 'MF', x: 60, y: 50 },
+                { pos: 'MF', x: 80, y: 50 },
+                { pos: 'FW', x: 35, y: 20 },
+                { pos: 'FW', x: 65, y: 20 }
+            ]
+        };
+
+        let currentFormation = '4-4-2';
+        let currentLineup = {};
+        let selectedSlot = null;
+
+        function renderLineupEditor(c) {
+            if (!app.lineups[app.team]) {
+                app.lineups[app.team] = { formation: '4-4-2', players: {} };
+            }
+
+            currentFormation = app.lineups[app.team].formation || '4-4-2';
+            currentLineup = app.lineups[app.team].players || {};
+
+            const teamPlayers = app.players.filter(p => p.team === app.team);
+
+            c.innerHTML = `
+                <div class="card">
+                    <h2 class="card-title">⚽ ترکیب بازیکنان</h2>
+                    
+                    <div class="formation-selector">
+                        <strong style="color:#1eff00;">انتخاب چینش:</strong>
+                        ${Object.keys(formations).map(f => `
+                            <div class="formation-btn ${f === currentFormation ? 'active' : ''}" onclick="changeFormation('${f}')">${f}</div>
+                        `).join('')}
+                    </div>
+
+                    <div class="pitch-container" id="pitch">
+                        <div class="pitch-lines">
+                            <div class="halfway-line"></div>
+                            <div class="center-circle"></div>
+                            <div class="center-spot"></div>
+                            <div class="penalty-box top"></div>
+                            <div class="penalty-box bottom"></div>
+                        </div>
+                        ${renderPitchSlots()}
+                    </div>
+
+                    <div style="text-align:center; margin: 20px 0;">
+                        <button class="btn" onclick="saveLineup()">💾 ذخیره ترکیب</button>
+                        <button class="btn btn-secondary" onclick="clearLineup()">🗑️ پاک کردن همه</button>
+                        <button class="btn btn-secondary" onclick="autoFillLineup()">🤖 پر کردن خودکار</button>
+                    </div>
+
+                    <div class="player-list-selector">
+                        <h3 style="color:#1eff00; margin-bottom:15px;">بازیکنان موجود (${teamPlayers.length})</h3>
+                        ${teamPlayers.length === 0 ? '<p style="color:#b0b0b0;">بازیکنی وجود ندارد</p>' : teamPlayers.map(p => {
+                            const inLineup = Object.values(currentLineup).includes(p.id);
+                            return `
+                                <div class="player-item ${inLineup ? 'selected' : ''}" data-player-id="${p.id}">
+                                    <div>
+                                        <strong>${p.name}</strong>
+                                        <span style="color:#b0b0b0; margin-left:10px;">${p.position} • ${p.overall}</span>
+                                    </div>
+                                    <div style="color:#1eff00; font-weight:700;">${p.overall}</div>
+                                </div>
+                            `;
+                        }).join('')}
+                    </div>
+                </div>
+
+                <div class="modal" id="playerModal">
+                    <div class="modal-content">
+                        <div class="modal-header">انتخاب بازیکن</div>
+                        <div id="modalPlayerList"></div>
+                        <button class="modal-close" onclick="closeModal()">بستن</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderPitchSlots() {
+            const slots = formations[currentFormation];
+            return slots.map((slot, idx) => {
+                const playerId = currentLineup[idx];
+                const player = playerId ? app.players.find(p => p.id === playerId) : null;
+                
+                return `
+                    <div class="player-slot ${player ? 'filled' : 'empty'}" 
+                         style="left:${slot.x}%; top:${slot.y}%;"
+                         onclick="openPlayerSelector(${idx}, '${slot.pos}')">
+                        ${player ? `
+                            <div class="player-number">${player.overall}</div>
+                            <div class="player-short-name">${player.name.split(' ').pop()}</div>
+                        ` : `
+                            <div style="color:rgba(255,255,255,0.5); font-size:0.8em;">${slot.pos}</div>
+                            <div style="color:rgba(255,255,255,0.3); font-size:0.7em;">+</div>
+                        `}
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function changeFormation(formation) {
+            currentFormation = formation;
+            currentLineup = {};
+            renderLineupEditor(document.getElementById('content'));
+        }
+        window.changeFormation = changeFormation;
+
+        function openPlayerSelector(slotIdx, position) {
+            selectedSlot = slotIdx;
+            const modal = document.getElementById('playerModal');
+            const teamPlayers = app.players.filter(p => p.team === app.team && p.position === position);
+            
+            const modalList = document.getElementById('modalPlayerList');
+            modalList.innerHTML = teamPlayers.length === 0 ? 
+                `<p style="color:#b0b0b0;">بازیکنی در پست ${position} وجود ندارد</p>` :
+                teamPlayers.map(p => {
+                    const inLineup = Object.values(currentLineup).includes(p.id);
+                    return `
+                        <div class="player-item ${inLineup ? 'selected' : ''}" onclick="selectPlayer(${p.id})">
+                            <div>
+                                <strong>${p.name}</strong>
+                                <span style="color:#b0b0b0; margin-left:10px;">${p.position}</span>
+                            </div>
+                            <div style="color:#1eff00; font-weight:700;">${p.overall}</div>
+                        </div>
+                    `;
+                }).join('');
+            
+            modal.classList.add('show');
+        }
+        window.openPlayerSelector = openPlayerSelector;
+
+        function selectPlayer(playerId) {
+            if (selectedSlot !== null) {
+                // Remove player from other slots if exists
+                Object.keys(currentLineup).forEach(key => {
+                    if (currentLineup[key] === playerId) {
+                        delete currentLineup[key];
+                    }
+                });
+                
+                currentLineup[selectedSlot] = playerId;
+                closeModal();
+                renderLineupEditor(document.getElementById('content'));
+            }
+        }
+        window.selectPlayer = selectPlayer;
+
+        function closeModal() {
+            document.getElementById('playerModal').classList.remove('show');
+            selectedSlot = null;
+        }
+        window.closeModal = closeModal;
+
+        function saveLineup() {
+            app.lineups[app.team] = {
+                formation: currentFormation,
+                players: { ...currentLineup }
+            };
+            
+            app.notifications.push({
+                id: Date.now(),
+                text: `تیم ${app.team} ترکیب خود را با چینش ${currentFormation} ذخیره کرد`,
+                time: new Date().toLocaleString('fa-IR')
+            });
+            
+            saveData();
+            alert('✅ ترکیب با موفقیت ذخیره شد!');
+        }
+        window.saveLineup = saveLineup;
+
+        function clearLineup() {
+            if (!confirm('آیا از پاک کردن تمام ترکیب مطمئن هستید؟')) return;
+            
+            currentLineup = {};
+            renderLineupEditor(document.getElementById('content'));
+        }
+        window.clearLineup = clearLineup;
+
+        function autoFillLineup() {
+            const teamPlayers = app.players.filter(p => p.team === app.team);
+            const slots = formations[currentFormation];
+            
+            currentLineup = {};
+            
+            slots.forEach((slot, idx) => {
+                const availablePlayers = teamPlayers.filter(p => {
+                    return p.position === slot.pos && !Object.values(currentLineup).includes(p.id);
+                });
+                
+                if (availablePlayers.length > 0) {
+                    // Sort by overall and pick the best
+                    availablePlayers.sort((a, b) => b.overall - a.overall);
+                    currentLineup[idx] = availablePlayers[0].id;
+                }
+            });
+            
+            renderLineupEditor(document.getElementById('content'));
+            alert('ترکیب به صورت خودکار پر شد!');
+        }
+        window.autoFillLineup = autoFillLineup;
